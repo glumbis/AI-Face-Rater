@@ -1,0 +1,15 @@
+.env
+__pycache__/
+
+# Pictures are not stored in this repo, except the two model faces
+*.jpg
+*.jpeg
+*.png
+!perBoy.jpg
+!perGirl.jpg
+
+# Created when you rate faces with datasetfacerater.py
+ratings.csv
+
+# Large dlib model - download separately
+shape_predictor_68_face_landmarks.dat
