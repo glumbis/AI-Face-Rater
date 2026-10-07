@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feature tests</title>
+<!-- tips.js imports ../js/facedata.js; the tests use a stand-in with phototips.py's values (the real file is checked at the end) -->
+<script type="importmap">{ "imports": { "../js/facedata.js": "./stub-facedata.js" } }</script>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, 'Segoe UI', sans-serif; }
+  body { margin: 24px auto; max-width: 860px; padding: 0 16px; }
+  h1 { font-size: 20px; }
+  #summary { font-weight: 600; margin: 8px 0 16px; }
+  .row { padding: 3px 0; font-size: 14px; border-bottom: 1px solid #8884; }
+  .pass::before { content: 'PASS  '; color: #1a8a3a; font-weight: 600; }
+  .fail::before { content: 'FAIL  '; color: #c62828; font-weight: 600; }
+  .fail { color: #c62828; }
+  .skip::before { content: 'SKIP  '; color: #b45309; font-weight: 600; }
+  .group { margin-top: 18px; font-weight: 600; }
+  #cards img { width: 260px; margin: 8px 8px 0 0; border: 1px solid #8886; border-radius: 8px; }
+</style>
+</head>
+<body>
+<h1>Feature tests: tips, history, share, PWA files</h1>
+<div id="summary">Running...</div>
+<div id="log"></div>
+<div id="cards"></div>
+<script type="module">
+import { photoTips, measure, pickTips, tipLines, TIPS, GREAT } from '../js/tips.js';
+import * as history from '../js/history.js';
+import { makeShareCard, shareOrDownload, CARD_WIDTH, CARD_HEIGHT } from '../js/share.js';
+
+const log = document.getElementById('log');
+const results = { pass: 0, fail: 0, skip: 0, failures: [] };
+let groupName = '';
+function group(name) {
+  groupName = name;
+  const d = document.createElement('div');
+  d.className = 'group';
+  d.textContent = name;
+  log.append(d);
+}
+function report(kind, name, detail = '') {
+  results[kind]++;
+  if (kind === 'fail') results.failures.push(`${groupName}: ${name} ${detail}`);
+  const d = document.createElement('div');
+  d.className = `row ${kind}`;
+  d.textContent = name + (detail ? ` (${detail})` : '');
+  log.append(d);
+}
+async function test(name, fn) {
+  try {
+    await fn();
+    report('pass', name);
+  } catch (e) {
+    report('fail', name, e && e.message ? e.message : String(e));
+  }
+}
+const eq = (a, b, what = '') => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${what} expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); };
+const ok = (c, what = 'condition') => { if (!c) throw new Error(what + ' is false'); };
+const near = (a, b, tol, what = '') => { if (!(Math.abs(a - b) <= tol)) throw new Error(`${what} expected ${b} +-${tol}, got ${a}`); };
+
+// ---------------------------------------------------------------- tips
+group('tips');
+
+// Deterministic noise 0..255 (an LCG), so the pictures never change
+function rng(seed) { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296); }
+function picture(w, h, fn) {
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = fn(x, y), i = (y * w + x) * 4;
+    data[i] = data[i + 1] = data[i + 2] = v; data[i + 3] = 255;
+  }
+  return new ImageData(data, w, h);
+}
+const noisy = (mean, amp, seed = 1) => { const r = rng(seed); return () => mean + (r() - 0.5) * 2 * amp; };
+// 478 points; the stand-in SUBSET indices (10 top, 152 bottom, 234 left, 454 right) define the box, the others are
+// put far outside to show that only the SUBSET points count
+function points478(box, far = true) {
+  const [l, t, r, b] = box, cx = (l + r) / 2, cy = (t + b) / 2;
+  const pts = Array.from({ length: 478 }, () => (far ? { x: -900, y: 5000 } : { x: cx, y: cy }));
+  pts[10] = { x: cx, y: t }; pts[152] = { x: cx, y: b }; pts[234] = { x: l, y: cy }; pts[454] = { x: r, y: cy };
+  for (const i of [1, 33, 263]) pts[i] = { x: cx, y: cy };
+  return pts;
+}
+const W = 400, H = 400;
+const good = () => picture(W, H, noisy(128, 50));
+const faceBox = [100, 80, 300, 320]; // 200 wide, 240 tall: size 0.6
+
+await test('even, sharp, straight, medium size gives the great-setup line', () => {
+  eq(photoTips(good(), points478(faceBox), { turn: 2, tilt: -3 }), [GREAT]);
+});
+await test('GREAT line text is the Python one', () => eq(GREAT, 'Great setup: straight, sharp and evenly lit.'));
+await test('flat picture is blurry', () => eq(photoTips(picture(W, H, () => 128), points478(faceBox), null), [TIPS.blurry]));
+await test('dark picture', () => eq(photoTips(picture(W, H, noisy(40, 30)), points478(faceBox), null), [TIPS.dark]));
+await test('very bright picture', () => eq(photoTips(picture(W, H, noisy(238, 15)), points478(faceBox), null), [TIPS.bright]));
+await test('one half brighter than the other', () => {
+  const r = rng(5);
+  const img = picture(W, H, (x) => (x < 200 ? 90 : 190) + (r() - 0.5) * 80);
+  eq(photoTips(img, points478(faceBox), null), [TIPS.uneven]);
+});
+await test('face too big in the picture', () => eq(photoTips(good(), points478([10, 10, 390, 390]), null), [TIPS.close]));
+await test('face too small in the picture', () => eq(photoTips(good(), points478([180, 180, 230, 230]), null), [TIPS.far]));
+await test('turned head', () => eq(photoTips(good(), points478(faceBox), { turn: -20, tilt: 0 }), [TIPS.turn]));
+await test('tilted head', () => eq(photoTips(good(), points478(faceBox), { turn: 0, tilt: 18 }), [TIPS.tilt]));
+await test('angles as a [turn, tilt] pair work too', () => eq(photoTips(good(), points478(faceBox), [20, 0]), [TIPS.turn]));
+await test('turn and tilt thresholds are exclusive (12 and 15 are fine)', () => eq(photoTips(good(), points478(faceBox), { turn: 12, tilt: -15 }), [GREAT]));
+await test('at most 2 tips, most important first (turn, tilt, then blurry)', () => {
+  eq(photoTips(picture(W, H, () => 128), points478(faceBox), { turn: 30, tilt: 30 }), [TIPS.turn, TIPS.tilt]);
+  eq(photoTips(picture(W, H, () => 128), points478(faceBox), { turn: 30, tilt: 0 }), [TIPS.turn, TIPS.blurry]);
+});
+await test('priority order of the rest: blurry, dark, uneven, size', () => {
+  const m = { turn: null, tilt: null, sharpness: 1, brightness: 10, imbalance: 0.5, size: 0.9 };
+  eq(pickTips(m, 8), ['blurry', 'dark', 'uneven', 'close']);
+  eq(pickTips({ ...m, brightness: 250, size: 0.05 }, 8), ['blurry', 'bright', 'uneven', 'far']);
+  eq(pickTips({ ...m, turn: -50, tilt: 50 }), ['turn', 'tilt']);
+  eq(tipLines({ ...m, sharpness: 100, brightness: 128, imbalance: 0, size: 0.4 }), [GREAT]);
+});
+await test('no angles means no turn/tilt tip', () => eq(pickTips({ turn: null, tilt: null, sharpness: 100, brightness: 128, imbalance: 0, size: 0.4 }), []));
+await test('only the SUBSET points make the face box', () => {
+  const m = measure(good(), points478(faceBox, true), null);
+  near(m.size, 0.6, 1e-9, 'size');
+});
+await test('tips are never thrown: no points or no picture gives []', () => {
+  eq(photoTips(good(), [], null), []);
+  eq(photoTips(null, points478(faceBox), null), []);
+  eq(photoTips(good(), [{ x: 'a' }], null).length <= 2, true);
+});
+await test('a box partly outside the picture does not break', () => {
+  const t = photoTips(good(), points478([-50, -50, 150, 150]), null);
+  ok(Array.isArray(t) && t.length >= 1);
+});
+await test('[x, y] pairs work as points', () => {
+  const pairs = points478(faceBox).map((p) => [p.x, p.y]);
+  eq(photoTips(good(), pairs, null), [GREAT]);
+});
+
+// Numbers computed by the Python phototips.measure on the same pictures (tools: see the repo's phototips.py)
+function formula(w) {
+  return (x, y) => Math.min(255, Math.max(0, ((x * x * 7 + y * 13 + x * y * 3) % 97) * 2 + 20 + Math.floor(x * 40 / w) - 10));
+}
+const PY = {
+  small: { w: 300, h: 240, box: [60.5, 40.2, 230.7, 200.9], sharpness: 15146.008399925231, brightness: 124.97367647058823, imbalance: 0.09038373963458188, size: 0.6695833333333333 },
+  shrunk: { w: 1500, h: 1200, box: [300.0, 150.5, 1100.3, 1000.9], sharpness: 1336.5058053587545, brightness: 124.3654426125919, imbalance: 0.08601904809854763, size: 0.7086666666666667 },
+  tinyface: { w: 640, h: 480, box: [300.0, 200.0, 360.5, 270.0], sharpness: 2413.1036990933644, brightness: 126.23333333333333, imbalance: 0.010788788713267126, size: 0.14583333333333334 },
+};
+for (const [name, c] of Object.entries(PY)) {
+  await test(`measurements match Python (${name}: ${c.w}x${c.h})`, () => {
+    const m = measure(picture(c.w, c.h, formula(c.w)), points478(c.box, false), { turn: 5, tilt: -3 });
+    near(m.brightness, c.brightness, 0.2, 'brightness');
+    near(m.imbalance, c.imbalance, 0.003, 'imbalance');
+    near(m.size, c.size, 1e-6, 'size');
+    near(m.sharpness / c.sharpness, 1, 0.03, 'sharpness ratio');
+    eq([m.turn, m.tilt], [5, -3]);
+  });
+}
+
+// ---------------------------------------------------------------- history
+group('history');
+
+class FakeStorage {
+  constructor() { this.m = new Map(); }
+  getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }
+  setItem(k, v) { this.m.set(k, String(v)); }
+  removeItem(k) { this.m.delete(k); }
+}
+const at = (d, h = 12, m = 0) => new Date(2026, 5, d, h, m).getTime(); // June 2026, local time
+const NOW = at(15);
+function fresh() { const s = new FakeStorage(); history._setStorage(s); return s; }
+const rate = (reference, score, extra = {}) => history.addRating({ reference, score, clarity: 0.8, symmetry: 0.9, source: 'file', ...extra });
+
+await test('empty history', () => {
+  fresh();
+  eq(history.stats('boy', NOW), { best: null, average: null, count: 0, trend: null, diff: 0, streak: 0 });
+  eq(history.entryCount(), 0);
+});
+await test('first rating: count 1, best = average = the score, no trend', () => {
+  fresh();
+  eq(rate('boy', 6.0, { now: NOW }), true);
+  const s = history.stats('boy', NOW);
+  eq([s.best, s.average, s.count, s.trend], [6, 6, 1, null]);
+});
+await test('best, average, count and trend against the EARLIER average', () => {
+  fresh();
+  rate('boy', 6.0, { now: at(15, 9) });
+  rate('boy', 7.0, { now: at(15, 10) });
+  let s = history.stats('boy', NOW);
+  eq([s.best, s.average, s.count, s.trend], [7, 6.5, 2, 'up']);
+  near(s.diff, 1, 1e-9);
+  rate('boy', 6.5, { now: at(15, 11) });          // equals the earlier average 6.5: no arrow
+  s = history.stats('boy', NOW);
+  eq([s.best, s.count, s.trend], [7, 3, null]);
+  rate('boy', 5.0, { now: at(15, 12) });          // 1.5 below
+  s = history.stats('boy', NOW);
+  eq([s.trend, s.count], ['down', 4]);
+  near(s.average, 6.125, 1e-9);
+  near(s.diff, -1.5, 1e-9);
+});
+await test('trend threshold is 0.1 (inclusive), like Python', () => {
+  fresh();
+  rate('girl', 5.0, { now: at(15, 9) });
+  rate('girl', 5.1, { now: at(15, 10) });
+  eq(history.stats('girl', NOW).trend, 'up');
+  fresh();
+  rate('girl', 5.0, { now: at(15, 9) });
+  rate('girl', 5.09, { now: at(15, 10) });
+  eq(history.stats('girl', NOW).trend, null);
+});
+await test('each reference has its own numbers; the streak counts all of them', () => {
+  fresh();
+  rate('boy', 6.0, { now: at(14) });
+  rate('girl', 4.0, { now: at(15) });
+  eq([history.stats('boy', NOW).count, history.stats('girl', NOW).count, history.stats('average', NOW).count], [1, 1, 0]);
+  eq(history.stats('average', NOW).streak, 2);
+});
+await test('same pictureId and reference is saved once; another reference is saved too', () => {
+  fresh();
+  eq(rate('boy', 6.0, { pictureId: 'p1', now: at(15, 9) }), true);
+  eq(rate('boy', 6.0, { pictureId: 'p1', now: at(15, 9, 5) }), false);
+  eq(rate('boy', 6.01, { pictureId: 'p1', now: at(15, 9, 6) }), false);   // seen id wins over changed numbers
+  eq(rate('girl', 5.5, { pictureId: 'p1', now: at(15, 9, 7) }), true);
+  eq(rate('boy', 6.0, { pictureId: 'p2', now: at(15, 9, 8) }), true);
+  eq(history.entryCount(), 3);
+});
+await test('without a pictureId an identical rating within 10 minutes counts as the same picture', () => {
+  fresh();
+  eq(rate('boy', 6.0, { now: at(15, 9, 0) }), true);
+  eq(rate('boy', 6.0, { now: at(15, 9, 5) }), false);
+  eq(rate('boy', 6.0, { now: at(15, 9, 20) }), true);
+  eq(rate('boy', 6.5, { now: at(15, 9, 21) }), true);
+  eq(history.entryCount(), 3);
+});
+await test('streak: today, yesterday, gaps', () => {
+  fresh();
+  rate('boy', 6, { now: at(10) }); rate('boy', 6.1, { now: at(13) }); rate('boy', 6.2, { now: at(14) }); rate('boy', 6.3, { now: at(15) });
+  eq(history.stats('boy', NOW).streak, 3);
+  eq(history.stats('boy', at(16)).streak, 3);      // nothing yet today: counts up to yesterday
+  eq(history.stats('boy', at(17)).streak, 0);      // a day without a rating ends it
+  eq(history.stats('boy', at(15, 0, 5)).streak, 3); // just after midnight is still today
+});
+await test('streak: last rating before midnight and the next just after are two days', () => {
+  fresh();
+  rate('boy', 6, { now: at(14, 23, 59) });
+  rate('boy', 6.5, { now: at(15, 0, 1) });
+  eq(history.stats('boy', at(15, 8)).streak, 2);
+});
+await test('what is stored is numbers only (plus the reference and source words)', () => {
+  const s = fresh();
+  rate('boy', 6.123456, { clarity: null, symmetry: 0.987654, source: 'camera', pictureId: 'secret-name.jpg', now: NOW });
+  const raw = s.getItem('afr.history.v1');
+  ok(!raw.includes('secret-name'), 'picture id must not be stored');
+  const [e] = JSON.parse(raw);
+  eq(Object.keys(e).sort(), ['c', 'r', 's', 'src', 't', 'y']);
+  eq([e.r, e.s, e.c, e.y, e.src, e.t], ['boy', 6.123, null, 0.988, 'camera', NOW]);
+  eq(history.stats('boy', NOW).best, 6.123);
+});
+await test('invalid ratings are refused', () => {
+  fresh();
+  eq(history.addRating({ reference: 'cat', score: 5 }), false);
+  eq(history.addRating({ reference: 'boy', score: NaN }), false);
+  eq(history.addRating({ reference: 'boy', score: 'x' }), false);
+  eq(history.addRating(), false);
+  eq(history.entryCount(), 0);
+});
+await test('clearHistory deletes everything and forgets the seen pictures', () => {
+  const s = fresh();
+  rate('boy', 6, { pictureId: 'p1', now: NOW });
+  eq(history.clearHistory(), true);
+  eq(s.getItem('afr.history.v1'), null);
+  eq(history.stats('boy', NOW), { best: null, average: null, count: 0, trend: null, diff: 0, streak: 0 });
+  eq(rate('boy', 6, { pictureId: 'p1', now: NOW }), true);
+});
+await test('corrupt or foreign data in the storage is ignored', () => {
+  const s = fresh();
+  s.setItem('afr.history.v1', '{not json');
+  eq(history.stats('boy', NOW).count, 0);
+  s.setItem('afr.history.v1', JSON.stringify([{ t: NOW, r: 'boy', s: 5 }, { t: 'x', r: 'boy', s: 5 }, null, { t: NOW, r: 'cat', s: 5 }, 7]));
+  eq(history.stats('boy', NOW).count, 1);
+  rate('boy', 6, { now: NOW });                 // adding still works on top of it
+  eq(history.stats('boy', NOW).count, 2);
+});
+await test('storage that throws (private mode) is handled silently, history lives in memory', () => {
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+  history._setStorage(broken);
+  eq(rate('boy', 6, { now: at(15, 9) }), true);
+  eq(rate('boy', 7, { now: at(15, 10) }), true);
+  const s = history.stats('boy', NOW);
+  eq([s.count, s.best, s.trend], [2, 7, 'up']);
+  eq(history.clearHistory(), true);
+  eq(history.stats('boy', NOW).count, 0);
+});
+await test('no storage object at all (null) works the same', () => {
+  history._setStorage(null);
+  rate('girl', 4, { now: NOW });
+  eq(history.stats('girl', NOW).count, 1);
+  eq(history.clearHistory(), true);
+});
+await test('storage that fills up while running keeps working in memory', () => {
+  const s = new FakeStorage();
+  history._setStorage(s);
+  rate('boy', 6, { now: at(15, 9) });
+  s.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };
+  eq(rate('boy', 7, { now: at(15, 10) }), true);
+  eq(history.stats('boy', NOW).count, 2);
+});
+await test('default storage (real localStorage) does not throw', () => {
+  history._setStorage(undefined);
+  history.clearHistory();
+  rate('average', 5, { now: NOW });
+  eq(history.stats('average', NOW).count, 1);
+  history.clearHistory();
+  eq(history.stats('average', NOW).count, 0);
+});
+history._setStorage(new FakeStorage());
+
+// ---------------------------------------------------------------- share
+group('share');
+
+function pngSize(bytes) {
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < 8; i++) if (bytes[i] !== sig[i]) return null;
+  const v = new DataView(bytes.buffer, bytes.byteOffset);
+  return [v.getUint32(16), v.getUint32(20)];
+}
+async function pixelAt(blob, x, y) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  return Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3));
+}
+const stats3 = { best: 7.9, average: 6.8, count: 12, trend: 'up', diff: 0.4, streak: 3 };
+const blobs = {};
+for (const theme of ['light', 'dark']) {
+  await test(`${theme} card is a ${CARD_WIDTH}x${CARD_HEIGHT} PNG`, async () => {
+    const blob = await makeShareCard({ score: 7.4, clarity: 0.82, symmetry: 0.91, reference: 'girl', stats: stats3, theme });
+    blobs[theme] = blob;
+    eq(blob.type, 'image/png');
+    ok(blob.size > 8000, 'blob has content (' + blob.size + ' bytes)');
+    eq(pngSize(new Uint8Array(await blob.arrayBuffer())), [1080, 1350]);
+  });
+}
+await test('light and dark use their backgrounds and differ', async () => {
+  eq(await pixelAt(blobs.light, 5, 5), [0xf3, 0xf3, 0xf3]);
+  eq(await pixelAt(blobs.dark, 5, 5), [0x20, 0x20, 0x20]);
+  eq(await pixelAt(blobs.light, 540, 90), [255, 255, 255]);      // inside the card
+  eq(await pixelAt(blobs.dark, 540, 90), [0x2b, 0x2b, 0x2b]);
+});
+await test('card shows something where the score is (not a blank card)', async () => {
+  const bmp = await createImageBitmap(blobs.light);
+  const c = document.createElement('canvas'); c.width = 1080; c.height = 1350;
+  const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0);
+  const d = ctx.getImageData(150, 250, 780, 300).data;
+  let ink = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] < 128) ink++;
+  ok(ink > 5000, 'score pixels: ' + ink);
+});
+await test('a clarity of null, no stats and a score of 10.0 still make a card', async () => {
+  const a = await makeShareCard({ score: 10, clarity: null, symmetry: 1, reference: 'average', stats: null, theme: 'light' });
+  const b = await makeShareCard({ score: 2.3, clarity: 0.5, symmetry: 0.5, reference: 'boy', stats: { best: null, average: null, count: 0, trend: null, diff: 0, streak: 0 }, theme: 'dark' });
+  for (const blob of [a, b]) eq(pngSize(new Uint8Array(await blob.arrayBuffer())), [1080, 1350]);
+  document.getElementById('cards').append(...[a, b, blobs.light, blobs.dark].map((blob) => Object.assign(new Image(), { src: URL.createObjectURL(blob), alt: 'share card' })));
+});
+await test('shareOrDownload uses navigator.share with a PNG file when files can be shared', async () => {
+  let shared = null;
+  Object.defineProperty(navigator, 'canShare', { value: (d) => !!d.files, configurable: true });
+  Object.defineProperty(navigator, 'share', { value: async (d) => { shared = d; }, configurable: true });
+  try {
+    eq(await shareOrDownload(blobs.light), 'shared');
+    eq(shared.files.length, 1);
+    eq([shared.files[0].type, shared.files[0].name], ['image/png', 'ai-face-rater.png']);
+    eq(shared.files[0].size, blobs.light.size);
+  } finally { delete navigator.share; delete navigator.canShare; }
+});
+await test('a closed share sheet is not an error and does not download', async () => {
+  Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+  Object.defineProperty(navigator, 'share', { value: async () => { throw new DOMException('closed', 'AbortError'); }, configurable: true });
+  try { eq(await shareOrDownload(blobs.light), 'cancelled'); } finally { delete navigator.share; delete navigator.canShare; }
+});
+await test('without file sharing it downloads the PNG', async () => {
+  const clicked = [];
+  const original = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { clicked.push([this.download, this.href.slice(0, 5)]); };
+  try {
+    eq(await shareOrDownload(blobs.light, 'card.png'), 'downloaded');
+    eq(clicked, [['card.png', 'blob:']]);
+  } finally { HTMLAnchorElement.prototype.click = original; }
+});
+await test('a share that fails (not allowed) falls back to the download', async () => {
+  const original = HTMLAnchorElement.prototype.click;
+  let clicks = 0;
+  HTMLAnchorElement.prototype.click = function () { clicks++; };
+  Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+  Object.defineProperty(navigator, 'share', { value: async () => { throw new DOMException('no', 'NotAllowedError'); }, configurable: true });
+  try { eq(await shareOrDownload(blobs.light), 'downloaded'); eq(clicks, 1); } finally { HTMLAnchorElement.prototype.click = original; delete navigator.share; delete navigator.canShare; }
+});
+
+// ---------------------------------------------------------------- PWA files
+group('manifest, icons, service worker');
+const base = new URL('../', import.meta.url);
+await test('manifest has the needed fields and its icons exist at the right size', async () => {
+  const m = await (await fetch(new URL('manifest.webmanifest', base))).json();
+  eq([m.name, m.display, m.start_url], ['AI Face Rater', 'standalone', '.']);
+  ok(m.short_name && m.theme_color && m.background_color, 'short_name/theme_color/background_color');
+  ok(m.icons.some((i) => i.sizes === '192x192') && m.icons.some((i) => i.sizes === '512x512') && m.icons.some((i) => i.purpose === 'maskable'), 'icon set');
+  for (const icon of m.icons) {
+    const img = new Image();
+    img.src = new URL(icon.src, new URL('manifest.webmanifest', base)).href;
+    await img.decode();
+    eq([img.naturalWidth, img.naturalHeight].join('x'), icon.sizes, icon.src);
+  }
+});
+await test('sw.js parses, has the build placeholder and handles fetch', async () => {
+  const text = await (await fetch(new URL('sw.js', base))).text();
+  new Function(text);
+  ok(text.includes("const BUILD = '__BUILD__'"), 'build placeholder');
+  ok(text.includes("addEventListener('fetch'") && text.includes("addEventListener('activate'"), 'listeners');
+});
+await test('config.js exports MP_VERSION and pinned jsDelivr URLs', async () => {
+  const c = await import('../js/config.js');
+  ok(/^\d+\.\d+\.\d+$/.test(c.MP_VERSION), 'MP_VERSION ' + c.MP_VERSION);
+  ok(c.MP_BUNDLE_URL.includes('@' + c.MP_VERSION) && c.MP_WASM_URL.includes('@' + c.MP_VERSION), 'pinned');
+  ok(c.MODEL_URL.endsWith('/face_landmarker.task'), 'model url');
+  eq(c.MP_PRECACHE_URLS.length, 3);
+  ok((await fetch(c.MODEL_URL, { method: 'HEAD' })).ok, 'model is served');
+});
+
+// ---------------------------------------------------------------- the real facedata.js (when it exists)
+group('real facedata.js');
+{
+  let real = null;
+  try { real = await import(new URL('../js/facedata.js', import.meta.url) + '?real'); } catch { /* not generated yet */ }
+  if (!real) {
+    report('skip', 'js/facedata.js does not exist yet (generated by tools/export_web_data.py)');
+  } else {
+    // Note: the import map above sends '../js/facedata.js' to the stand-in, so the ?real import is a separate URL
+    await test('CONST has every phototips constant tips.js reads', () => {
+      const names = ['MAX_TIPS', 'MEASURE_MAX_SIZE', 'TURN_TIP', 'TILT_TIP', 'SHARPNESS_WIDTH', 'BLURRY_BELOW', 'TOO_DARK_BELOW', 'TOO_BRIGHT_ABOVE', 'UNEVEN_LIGHT_ABOVE', 'TOO_CLOSE_ABOVE', 'TOO_FAR_BELOW'];
+      for (const n of names) ok(Number.isFinite(real.CONST['PHOTOTIPS_' + n] ?? real.CONST[n]), 'CONST.' + n);
+      ok(Array.isArray(real.SUBSET) && real.SUBSET.length > 100, 'SUBSET');
+    });
+  }
+}
+
+document.getElementById('summary').textContent = `${results.pass} passed, ${results.fail} failed, ${results.skip} skipped`;
+document.getElementById('summary').style.color = results.fail ? '#c62828' : '#1a8a3a';
+document.title = `Feature tests: ${results.fail ? 'FAIL' : 'PASS'}`;
+window.__results = results;
+</script>
+</body>
+</html>
