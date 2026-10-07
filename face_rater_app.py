@@ -8,10 +8,12 @@ from tkinter import filedialog, messagebox
 
 try:
     import cv2
-    from PIL import Image, ImageColor, ImageDraw, ImageTk
+    import numpy as np
+    from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageTk
     import headpose as hp
     import history
     import landmarkdetect as ld
+    import overlay
     import phototips
 except ImportError as e:
     # Started by double-clicking there's no terminal to show the error in, so show it in a window
@@ -83,9 +85,9 @@ TIP_TEXT = "Look straight at the camera."
 NO_CAMERA_TEXT = "Pick a photo to get started."
 # The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
 HINT_LINES = 3
-# The colours of the landmark dots and uneven spots drawn on the rated picture (the same as in landmarkdetect.py)
-LEGEND_MINT = "#4ade80"
-LEGEND_RED = "#f87171"
+# The legend's swatches are little dark chips (the lines on the picture are white, so they need a dark background
+# to be seen on the window's light colours) with the same colours as overlay.py draws with
+LEGEND_CHIP = "#444444"
 # How often (in milliseconds) the dots after "Loading..." move on
 LOADING_DOTS_DELAY = 400
 
@@ -184,6 +186,40 @@ def shape_image(width, height, radius, fill, edge=None, dot=None):
         draw.ellipse(((middle - size / 2) * SMOOTHING, top * SMOOTHING,
                       (middle + size / 2) * SMOOTHING, (top + size) * SMOOTHING), fill=colour)
     return big.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def legend_swatch(kind, width, height):
+    # A small picture of one thing drawn on the rated photo: "lines" (a contour with an accent dot), "brackets" (the
+    # corners round a cheek) or "tint" (the soft red of uneven skin), on a dark chip
+    big = SMOOTHING * 2
+    image = Image.new("RGBA", (width * big, height * big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, width * big - 1, height * big - 1), radius=height * big // 4, fill=LEGEND_CHIP)
+    line = max(1.0, height / 9) * big
+    white = (255, 255, 255, 235)
+    if kind == "lines":
+        # A gentle curve (like an eyelid) from left to right, with a dot at the end
+        points = [((0.2 + 0.5 * t / 12) * width * big, (0.62 - 0.34 * np.sin(np.pi * t / 12)) * height * big)
+                  for t in range(13)]
+        draw.line(points, fill=white, width=round(line), joint="curve")
+        x, y, r = points[-1][0], points[-1][1], 1.5 * line
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=overlay.ACCENT_HEX)
+    elif kind == "brackets":
+        left, right, top, bottom = (0.3 * width * big, 0.7 * width * big, 0.24 * height * big, 0.76 * height * big)
+        arm, curve = 0.14 * width * big, 0.07 * width * big
+        for cx, cy, sx, sy in ((left, top, 1, 1), (right, top, -1, 1), (right, bottom, -1, -1), (left, bottom, 1, -1)):
+            ccx, ccy = cx + sx * curve, cy + sy * curve
+            points = [(cx + sx * arm, cy)]
+            points += [(ccx - sx * curve * np.sin(t), ccy - sy * curve * np.cos(t)) for t in np.linspace(0, np.pi / 2, 6)]
+            points.append((cx, cy + sy * arm))
+            draw.line(points, fill=white, width=round(line * 0.8), joint="curve")
+    else:
+        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        r = height * big * 0.3
+        cx, cy = width * big / 2, height * big / 2
+        ImageDraw.Draw(glow).ellipse((cx - r, cy - r, cx + r, cy + r), fill=ImageColor.getrgb(overlay.RED_HEX) + (230,))
+        image = Image.alpha_composite(image, glow.filter(ImageFilter.GaussianBlur(r * 0.45)))
+    return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
 class RoundButton(tk.Label):
@@ -405,20 +441,13 @@ class Legend(tk.Canvas):
         self.images = []
         if not self.shown:
             return
-        size = self.app.px(8)
         font = self.app.fonts["tiny"]
         x = 0
-        for kind, colour, text in (("dot", LEGEND_MINT, "Landmarks"), ("square", None, "Cheeks"),
-                                   ("dot", LEGEND_RED, "Uneven skin")):
-            if kind == "dot":
-                swatch = shape_image(size, size, size // 2, colour)
-            else:
-                # The cheek squares are drawn as an outline, so their swatch is an outline too
-                swatch = shape_image(size, size, self.app.px(2), c["bg"], edge=c["muted"])
-            image = ImageTk.PhotoImage(swatch)
+        for kind, text in (("lines", "Face lines"), ("brackets", "Cheeks"), ("tint", "Uneven skin")):
+            image = ImageTk.PhotoImage(legend_swatch(kind, self.app.px(22), self.app.px(14)))
             self.images.append(image)
-            self.create_image(x, (height - size) // 2, anchor="nw", image=image)
-            x += size + self.app.px(6)
+            self.create_image(x, (height - self.app.px(14)) // 2, anchor="nw", image=image)
+            x += self.app.px(22) + self.app.px(6)
             self.create_text(x, height // 2, text=text, anchor="w", font=font, fill=c["muted"])
             x += font.measure(text) + self.app.px(16)
 
@@ -876,15 +905,11 @@ class FaceRaterApp:
                 self.recent.add(camera, *angles, now)
             if problem is None:
                 self.set_status("Looking good! Press Take photo or Space.", GOOD)
-                color = (128, 222, 74)
             else:
                 # Only a tip: the button still works
                 self.set_status(hp.HINT_MESSAGES[problem], WARN)
-                color = (40, 160, 245)
-            # 162 dots, so small ones
-            radius = max(1, round(max(h, w) / 400))
-            for x, y in zip(xList, yList):
-                cv2.circle(frame, (round(x), round(y)), radius, color, -1, cv2.LINE_AA)
+            # Thin lines and a few accent dots, amber while the head is turned (the same style as the result picture)
+            overlay.draw_face(frame, xList, yList, turned=problem is not None, preview=True)
 
         self.show_picture(frame)
 

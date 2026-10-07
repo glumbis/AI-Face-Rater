@@ -10,6 +10,7 @@ from collections import namedtuple
 from facelayout import (BOY_PERFECT_X, BOY_PERFECT_Y, EYE_CORNERS, FACE_WIDTH_POINTS, GIRL_PERFECT_X, GIRL_PERFECT_Y,
                         LEFT_CHEEK_POINTS, MIRROR_PAIRS, NOSE_BRIDGE_POINTS, POINT_WEIGHTS as _POINT_WEIGHTS,
                         RIGHT_CHEEK_POINTS, SUBSET)
+import overlay
 from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
 
 # ---------- Put the path to the picture you want to rate here ----------
@@ -139,21 +140,14 @@ def landmark_detect(img, detectScale=1.0, live=False):
     return None if found is None else (found.xList, found.yList)
 
 
-# Colours of what is drawn on the rated picture (blue, green, red order, like all OpenCV colours)
-MINT = (128, 222, 74)  # landmark dots, #4ADE80
-SOFT_WHITE = (240, 240, 240)  # outline of the cheek squares
-SOFT_RED = (113, 113, 248)  # uneven skin, #F87171
+# What is drawn on the picture (contour lines, accent dots, cheek brackets, the uneven-skin tint) is in overlay.py
+# Colours of the uneven skin tint (blue, green, red order, like all OpenCV colours), also used by the legend
+SOFT_RED = overlay.SOFT_RED
 
 
 def draw_landmarks(img, xList, yList):
-    # Dot size follows the picture size, so the dots are visible on big photos and not huge on small ones.
-    # There are 162 of them, so they are smaller than the 68 dots of the old layout were
-    radius = max(1, round(max(img.shape[:2]) / 400))
-    # Soft mint dots: drawn smooth on a copy, then mixed 75% into the picture so the face still shows through
-    dots = img.copy()
-    for x, y in zip(xList, yList):
-        cv2.circle(img=dots, center=(int(x), int(y)), radius=radius, color=MINT, thickness=-1, lineType=cv2.LINE_AA)
-    cv2.addWeighted(dots, 0.75, img, 0.25, 0, dst=img)
+    # Thin smooth lines along the face outline, brows, eyes, nose and lips, and a few accent dots. In place
+    overlay.draw_face(img, xList, yList)
 
 
 # Head direction (head_angles, facing_problem and the limits) is in headpose.py
@@ -289,8 +283,9 @@ def cheek_inconsistencies(img, square, noseBrightness=None):
 
 
 def skin_clarity(img, drawOn, xList, yList):
-    # Returns 0 (very uneven cheeks) to 1 (clear cheeks), and draws the squares and inconsistent spots on drawOn
+    # Returns 0 (very uneven cheeks) to 1 (clear cheeks), and draws the cheek brackets and uneven spots on drawOn
     fractions = []
+    face_width = overlay.face_width(xList, yList)
     noseBrightness = nose_skin_brightness(img, xList, yList)
     for points in (LEFT_CHEEK_POINTS, RIGHT_CHEEK_POINTS):
         square = cheek_square(xList, yList, points)
@@ -299,16 +294,8 @@ def skin_clarity(img, drawOn, xList, yList):
             continue
         fractions.append(fraction)
 
-        x1, y1 = max(square[0], 0), max(square[1], 0)
-        region = drawOn[y1:y1 + mask.shape[0], x1:x1 + mask.shape[1]]
-        # Uneven spots in a soft red, mixed 60% into the skin so the skin still shows through
-        spots = mask == 1
-        region[spots] = (region[spots] * 0.4 + np.array(SOFT_RED) * 0.6).astype(np.uint8)
-        # A faint dark outline behind the white one, so the square also shows on pale skin
-        shadow = drawOn.copy()
-        cv2.rectangle(shadow, square[:2], square[2:], color=(30, 30, 30), thickness=4, lineType=cv2.LINE_AA)
-        cv2.addWeighted(shadow, 0.35, drawOn, 0.65, 0, dst=drawOn)
-        cv2.rectangle(drawOn, square[:2], square[2:], color=SOFT_WHITE, thickness=2, lineType=cv2.LINE_AA)
+        # Uneven spots as a soft red tint, and soft corner brackets around the cheek
+        overlay.draw_cheek(drawOn, square, mask, face_width)
 
     if not fractions:
         return None
