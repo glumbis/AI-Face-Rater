@@ -17,3 +17,6 @@ dataset_rater_settings.json
 
 # Large dlib model - download separately
 shape_predictor_68_face_landmarks.dat
+
+# Claude Code agent worktrees
+.claude/
