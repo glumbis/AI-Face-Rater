@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox
 try:
     import cv2
     from PIL import Image, ImageColor, ImageDraw, ImageTk
+    import headpose as hp
     import landmarkdetect as ld
 except ImportError as e:
     # Started by double-clicking there's no terminal to show the error in, so show it in a window
@@ -28,6 +29,9 @@ CAMERA_INDEX = 0
 PREVIEW_DETECT_WIDTH = 320
 # How often the live preview updates, in milliseconds
 PREVIEW_DELAY = 30
+# One picture where the face finder misses the face is not worth telling the user about. The "No face found"
+# message only comes when no face has been seen for this many seconds
+FACE_LOST_GRACE = 0.4
 # If the camera hasn't sent a new picture for this many seconds, it counts as disconnected
 CAMERA_LOST_AFTER = 1.0
 # How often (in milliseconds) the window checks if Windows switched between light and dark mode
@@ -427,6 +431,9 @@ class FaceRaterApp:
         self.currentMirrored = False
         self.animation = None
         self.canTakePhoto = False
+        self.tracker = hp.HeadTracker()  # steady head angles for the tip in the live preview
+        self.recent = hp.RecentFrames()  # the last second of pictures, to rate the most frontal one
+        self.lastFaceTime = 0.0  # when the live preview last saw a face
         self.scoreActive = False  # True while a score is shown
         self.scoreColour = "text"  # the name of the colour of the score, it depends on how good the score is
         self.cameraHint = TIP_TEXT  # what the hint says in camera mode
@@ -705,24 +712,35 @@ class FaceRaterApp:
                     self.show_preview_frame(frame)
         self.root.after(PREVIEW_DELAY, self.update_preview)
 
-    def show_preview_frame(self, frame):
-        # Mirror it, so moving your head to the left moves it to the left on the screen, like a mirror
-        frame = cv2.flip(frame, 1)
+    def show_preview_frame(self, camera):
+        # camera is the picture as the camera sent it. The preview shows it mirrored, so moving your head to the
+        # left moves it to the left on the screen, like a mirror
+        frame = cv2.flip(camera, 1)
+        now = time.monotonic()
         self.set_can_take_photo(True)
         self.set_camera_hint(TIP_TEXT)
 
         h, w = frame.shape[:2]
         found = ld.landmark_detect(frame, detectScale=min(1.0, PREVIEW_DETECT_WIDTH / w))
         if found is None:
-            self.set_status("No face found. Face the camera!", WARN)
+            if now - self.lastFaceTime > FACE_LOST_GRACE:
+                self.tracker.reset()
+                self.set_status("No face found. Face the camera!", WARN)
         else:
+            self.lastFaceTime = now
             xList, yList = found
-            problem = ld.facing_problem(xList, yList, frame.shape)
+            angles = hp.head_angles(xList, yList, frame.shape)
+            problem = None
+            if angles is not None:
+                # The tip follows the middle of the last few pictures, and Take photo can use any of the recent ones
+                problem = self.tracker.update(*angles, now)
+                self.recent.add(camera, *angles, now)
             if problem is None:
                 self.set_status("Looking good! Press Take photo or Space.", GOOD)
                 color = (128, 222, 74)
             else:
-                self.set_status(f"Face the camera! You are facing {problem}.", WARN)
+                # Only a tip: the button still works
+                self.set_status(hp.HINT_MESSAGES[problem], WARN)
                 color = (40, 160, 245)
             for x, y in zip(xList, yList):
                 cv2.circle(frame, (int(x), int(y)), 2, color, -1)
@@ -737,6 +755,13 @@ class FaceRaterApp:
         frame = self.camera.latest()
         if frame is None:
             return
+        # Rate the most frontal picture of the last second instead of just this one: a single picture can easily have
+        # the head a bit off (or the face finder's points wobbling) at the moment the button is pressed
+        best = self.recent.best()
+        if best is not None:
+            frame = best
+        self.recent.clear()
+        self.tracker.reset()
         # Rate the picture the way the camera took it, like a photo picked from a file (the face is the
         # same way round as other people see it). It's only shown mirrored, like the preview
         self.rate(frame, mirrored=True)

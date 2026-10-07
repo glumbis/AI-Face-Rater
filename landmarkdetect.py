@@ -5,6 +5,8 @@ import time
 import os
 import sys
 
+from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
+
 # ---------- Put the path to the picture you want to rate here ----------
 # (only used when you run this file from the terminal, face_rater_app.py has buttons for it)
 IMAGE_TO_RATE = "your_picture.jpg"
@@ -118,62 +120,7 @@ def draw_landmarks(img, xList, yList):
     cv2.addWeighted(dots, 0.75, img, 0.25, 0, dst=img)
 
 
-# ---------- Head direction ----------
-# How many degrees the head may be turned to the side, or tilted up or down, and still count as facing the camera.
-# Turning to the side changes the face's shape in the photo a lot (10 degrees costs about 2 points and makes the
-# face look lopsided), so the limit for that is tighter
-MAX_TURN = 12
-MAX_TILT = 20
-
-# Where some landmarks are on an average head in 3D (nose tip at 0, y up, z towards the camera),
-# used to work out which way the head in the picture is facing
-HEAD_MODEL = np.array([
-    (0.0, 0.0, 0.0),           # nose tip (30)
-    (0.0, -330.0, -65.0),      # chin (8)
-    (-225.0, 170.0, -135.0),   # outer corner of one eye (36)
-    (225.0, 170.0, -135.0),    # outer corner of the other eye (45)
-    (-150.0, -150.0, -125.0),  # mouth corner (48)
-    (150.0, -150.0, -125.0),   # other mouth corner (54)
-])
-HEAD_MODEL_POINTS = [30, 8, 36, 45, 48, 54]
-
-
-def head_angles(xList, yList, imgShape):
-    # Returns (turn, tilt) in degrees. turn is to the side, tilt is positive when looking down and negative when looking up
-    h, w = imgShape[:2]
-    points = np.array([(xList[p], yList[p]) for p in HEAD_MODEL_POINTS], dtype=np.float64)
-    # A normal webcam/phone camera: focal length about the picture width. Pretending the camera looks straight at
-    # the nose tip means the answer doesn't change with where the face is in the picture (a face low in a photo
-    # would otherwise look tilted down, even if the photo was just cropped differently)
-    camera = np.array([[w, 0, xList[30]], [0, w, yList[30]], [0, 0, 1]], dtype=np.float64)
-    # Start from a head facing the camera a bit away. HEAD_MODEL has y up and the camera y down, so that's the
-    # head turned half a round around the x axis. Without this guess it sometimes lands on an upside-down answer
-    rotation = np.array([[np.pi], [0.0], [0.0]])
-    position = np.array([[0.0], [0.0], [3000.0]])
-    ok, rotation, _ = cv2.solvePnP(HEAD_MODEL, points, camera, None, rotation, position,
-                                   useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
-    if not ok:
-        return None
-    # Which way the front of the face points, in the camera's directions (x right, y down, z away from the camera)
-    forward = cv2.Rodrigues(rotation)[0] @ np.array([0.0, 0.0, 1.0])
-    turn = np.degrees(np.arctan2(forward[0], -forward[2]))
-    tilt = np.degrees(np.arctan2(forward[1], -forward[2]))
-    return turn, tilt
-
-
-def facing_problem(xList, yList, imgShape):
-    # Returns None if the face is facing the camera, otherwise which way it's facing instead
-    angles = head_angles(xList, yList, imgShape)
-    if angles is None:
-        return None
-    turn, tilt = angles
-    if abs(turn) > MAX_TURN:
-        return "to the side"
-    if tilt > MAX_TILT:
-        return "down"
-    if tilt < -MAX_TILT:
-        return "up"
-    return None
+# Head direction (head_angles, facing_problem and the limits) is in headpose.py
 
 
 # ---------- Skin clarity (cheeks) ----------
@@ -448,7 +395,7 @@ def rate_face(img, gender):
 
     problem = facing_problem(selfieX, selfieY, img.shape)
     if problem is not None:
-        raise FaceError(f"Face the camera! You are facing {problem}.")
+        raise FaceError(REFUSED_MESSAGES[problem])
 
     # Draw on a copy, and check the skin colour on the clean picture
     picture = img.copy()
