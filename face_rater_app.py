@@ -49,7 +49,7 @@ NEUTRAL = "neutral"
 LIGHT = {
     "bg": "#f3f3f3", "text": "#1a1a1a", "muted": "#666666", "faint": "#9c9c9c", "footer": "#8c8c8c",
     "stage": "#e3e3e3", "track": "#dcdcdc", "thumb": "#ffffff", "thumbEdge": "#d0d0d0",
-    "trackEdge": "#dcdcdc", "segText": "#1a1a1a", "segOff": "#666666", "scoreHigh": "#0067c0", "scoreLow": "#b45309",
+    "trackEdge": "#dcdcdc", "barTrack": "#dcdcdc", "hintText": "#6b6b6b", "segText": "#1a1a1a", "segOff": "#666666", "scoreHigh": "#0067c0", "scoreLow": "#b45309",
     "accent": "#0067c0", "accentHover": "#1a78cb", "accentPress": "#3d8ad2", "onAccent": "#ffffff",
     "button": "#ffffff", "buttonHover": "#f8f8f8", "buttonPress": "#ececec", "buttonEdge": "#d0d0d0",
     "off": "#e6e6e6", "offText": "#a0a0a0",
@@ -59,7 +59,7 @@ LIGHT = {
 DARK = {
     "bg": "#202020", "text": "#f5f5f5", "muted": "#a3a3a3", "faint": "#6f6f6f", "footer": "#7d7d7d",
     "stage": "#161616", "track": "#1f1f1f", "thumb": "#5e5e5e", "thumbEdge": "#6b6b6b",
-    "trackEdge": "#333333", "segText": "#ffffff", "segOff": "#b0b0b0", "scoreHigh": "#60cdff", "scoreLow": "#f3c969",
+    "trackEdge": "#333333", "barTrack": "#3c3c3c", "hintText": "#a0a0a0", "segText": "#ffffff", "segOff": "#b0b0b0", "scoreHigh": "#60cdff", "scoreLow": "#f3c969",
     "accent": "#60cdff", "accentHover": "#78d5ff", "accentPress": "#52b3e0", "onAccent": "#000000",
     "button": "#2e2e2e", "buttonHover": "#373737", "buttonPress": "#292929", "buttonEdge": "#3e3e3e",
     "off": "#2a2a2a", "offText": "#6d6d6d",
@@ -68,8 +68,8 @@ DARK = {
 }
 
 # What the score shows (faded) when there is no score yet. A dash can't be mistaken for a real score of 0
-EMPTY_SCORE = "\u2013"
-TIP_TEXT = "Look straight at the camera and keep a neutral face."
+EMPTY_SCORE = "\u2013.\u2013"
+TIP_TEXT = "Look straight at the camera."
 NO_CAMERA_TEXT = "Pick a photo to get started."
 # The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
 HINT_LINES = 2
@@ -335,7 +335,7 @@ class StatusPill(tk.Canvas):
         pillWidth = padding * 2 + dotSize + gap + font.measure(text)
         background, textColour = c[self.kind]
         self.image = ImageTk.PhotoImage(shape_image(pillWidth, pillHeight, pillHeight // 2, background,
-                                                    dot=(padding + dotSize / 2, dotSize, textColour)))
+                                                    dot=(padding + dotSize / 2, dotSize, c["accent"] if self.kind == NEUTRAL else textColour)))
         left = (width - pillWidth) // 2
         top = (height - pillHeight) // 2
         self.create_image(left, top, anchor="nw", image=self.image)
@@ -361,7 +361,7 @@ class Bar(tk.Label):
     def restyle(self):
         c = self.app.colors
         width, height = self.size
-        picture = shape_image(width, height, height // 2, c["track"])
+        picture = shape_image(width, height, height // 2, c["barTrack"])
         if self.value:
             fillWidth = max(height, round(width * min(self.value, 1)))
             picture.alpha_composite(shape_image(fillWidth, height, height // 2, c["accent"]))
@@ -549,9 +549,11 @@ class FaceRaterApp:
         # the spare height, so the groups are spread out evenly
         right = self.themed_widget(tk.Frame(main), bg="bg")
         right.grid(row=0, column=1, sticky="ns", padx=(px(PAD), 0))
-        # Rows 1, 3 and 5 are empty and share the spare height equally, so the gaps between the groups are equal
-        for row in (1, 3, 5):
-            right.rowconfigure(row, weight=1, minsize=px(12))
+        # Rows 1, 3 and 5 are empty gaps. The score sits close under the toggle and the stats close under the score.
+        # All the spare height goes in the last gap, so the column reads as a top group and an action group at the bottom
+        right.rowconfigure(1, minsize=px(48))
+        right.rowconfigure(3, minsize=px(32))
+        right.rowconfigure(5, weight=1, minsize=px(16))
         panelW = px(PANEL_WIDTH)
         self.customWidgets = []
 
@@ -591,9 +593,9 @@ class FaceRaterApp:
 
         # The hint sits right above the buttons. It is always this many lines high, so nothing moves when it changes
         bottom = group(6, "sew")
-        self.hint = tk.Label(bottom, text=TIP_TEXT, font=self.fonts["hint"], justify="left", anchor="sw", bd=0, padx=0, pady=0,
+        self.hint = tk.Label(bottom, text=TIP_TEXT, font=self.fonts["small"], justify="left", anchor="sw", bd=0, padx=0, pady=0,
                              wraplength=panelW, height=HINT_LINES, takefocus=0)
-        self.themed_widget(self.hint, bg="bg", fg="muted")
+        self.themed_widget(self.hint, bg="bg", fg="hintText")
         self.hint.pack(fill="x", pady=(0, px(16)))
         self.takeButton = RoundButton(bottom, self, "Take photo", self.primary_clicked, True, panelW, px(48))
         self.takeButton.pack()
@@ -779,7 +781,7 @@ class FaceRaterApp:
             result = ld.rate_face(picture, self.gender.get())
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
-            self.set_hint("Take a new photo, or pick another one.")
+            self.set_hint("Back to camera and try again, or pick another photo.")
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
@@ -789,7 +791,7 @@ class FaceRaterApp:
         if clarity is None:
             self.clarityRow["value"].config(text="Not counted", fg=self.colors["muted"])
             self.clarityRow["bar"].set_value(None)
-            self.set_hint("Skin clarity is not counted: the cheeks are hidden, bearded or black-and-white.")
+            self.set_hint("Skin clarity is not counted: cheeks hidden, bearded or black-and-white.")
         else:
             self.clarityRow["value"].config(text=f"{round(clarity * 100)}%", fg=self.colors["text"])
             self.clarityRow["bar"].set_value(clarity)

@@ -320,6 +320,10 @@ def skin_clarity(img, drawOn, xList, yList):
         # Uneven spots in a soft red, mixed 60% into the skin so the skin still shows through
         spots = mask == 1
         region[spots] = (region[spots] * 0.4 + np.array(SOFT_RED) * 0.6).astype(np.uint8)
+        # A faint dark outline behind the white one, so the square also shows on pale skin
+        shadow = drawOn.copy()
+        cv2.rectangle(shadow, square[:2], square[2:], color=(30, 30, 30), thickness=4, lineType=cv2.LINE_AA)
+        cv2.addWeighted(shadow, 0.35, drawOn, 0.65, 0, dst=drawOn)
         cv2.rectangle(drawOn, square[:2], square[2:], color=SOFT_WHITE, thickness=2, lineType=cv2.LINE_AA)
 
     if not fractions:
