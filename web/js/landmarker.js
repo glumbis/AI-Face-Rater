@@ -1,10 +1,6 @@
-// MediaPipe Face Landmarker setup. The library and its WASM files come from jsDelivr, pinned to one exact version
-// (change MP_VERSION here and nowhere else). The model is the copy of the desktop app's file next to the page.
-export const MP_VERSION = '1.1.0';
-export const MP_BASE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
-export const MP_BUNDLE_URL = `${MP_BASE_URL}/vision_bundle.mjs`;
-export const MP_WASM_URL = `${MP_BASE_URL}/wasm`;
-export const MODEL_URL = './face_landmarker.task';
+// MediaPipe Face Landmarker setup. The library, its WASM files and the model URL all come from config.js (the one
+// place that pins the MediaPipe version).
+import { MP_BUNDLE_URL, MP_WASM_URL, MODEL_URL } from './config.js';
 
 // Same as MAX_FACES in the desktop app, only the biggest face is used
 const NUM_FACES = 3;

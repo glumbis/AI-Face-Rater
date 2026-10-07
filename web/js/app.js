@@ -2,6 +2,7 @@
 import { scoring, headpose, facedata, tips, history, share } from './modules.js';
 import { createLandmarker, detect as detectSafe } from './landmarker.js';
 import * as overlay from './overlay.js';
+import { registerServiceWorker } from './config.js';
 
 // ---------- Settings ----------
 // The live preview looks for the face in a copy this wide, which is much faster than the full frame
@@ -208,8 +209,7 @@ function animateScore(score) {
   scoreTimer = setTimeout(() => { cancelAnimationFrame(scoreAnimation); el.scoreNum.textContent = fmt(score); }, SCORE_ANIMATION_MS + 50);
 }
 
-function showHistory(info) {
-  const st = info?.stats;
+function showHistory(st) {
   if (st && st.count >= 2 && st.best != null) {
     el.historyLine.textContent = `Your best: ${fmt(st.best)}  ·  Average: ${fmt(st.average)} (${st.count} photos)`;
   } else {
@@ -284,7 +284,7 @@ function showError(e, id) {
 // Rates a new picture (a canvas) from the camera or a file
 async function rateNew(canvas, { mirrored = false, source = 'file' } = {}) {
   const id = ++pictureCounter;
-  current = { id, canvas, mirrored, source, rated: new Map(), tips: null, result: null, failed: false };
+  current = { id, canvas, mirrored, source, tips: null, result: null, failed: false };
   setMode('result');
   resetResultPanel();
   showPicture(canvas, mirrored);
@@ -328,23 +328,21 @@ function renderResult() {
   el.legend.classList.add('on');
 
   if (cur.tips === null) {
-    try { cur.tips = tips.photoTips(cur.imageData, cur.det.points478px, cur.angles) ?? []; } catch { cur.tips = []; }
+    try { cur.tips = tips.photoTips(cur.imageData, cur.det.points478px, cur.angles, cur.source) ?? []; } catch { cur.tips = []; }
   }
   const lines = [];
   if (clarity === null) lines.push('Skin clarity is not counted: cheeks hidden, bearded or black-and-white.');
   setHint([...lines, ...cur.tips]);
 
-  // Saved once per picture and model face
-  if (!cur.rated.has(reference)) {
-    try {
-      history.addRating({ reference, score: result.score, clarity, symmetry: result.symmetry, source: cur.source });
-      cur.rated.set(reference, { stats: history.stats(reference) });
-    } catch (e) {
-      console.warn('History is not available', e);
-      cur.rated.set(reference, null);
-    }
+  // Saved once per picture and model face (the same pictureId makes history.js skip a re-rating)
+  let stats = null;
+  try {
+    history.addRating({ reference, score: result.score, clarity, symmetry: result.symmetry, source: cur.source, pictureId: cur.id });
+    stats = history.stats(reference);
+  } catch (e) {
+    console.warn('History is not available', e);
   }
-  showHistory(cur.rated.get(reference));
+  showHistory(stats);
   animateScore(result.score);
   el.shareBtn.hidden = false;
 }
@@ -540,12 +538,14 @@ el.shareBtn.addEventListener('click', async () => {
   if (!current?.result) return;
   el.shareBtn.disabled = true;
   try {
-    const stats = current.rated.get(S.reference)?.stats ?? null;
+    let stats = null;
+    try { stats = history.stats(S.reference); } catch { /* the card works without it */ }
     const blob = await share.makeShareCard({
       score: current.result.score, clarity: current.result.clarity ?? null, symmetry: current.result.symmetry,
       reference: S.reference, stats, theme: theme(),
     });
-    await share.shareOrDownload(blob);
+    const how = await share.shareOrDownload(blob);
+    if (how === 'downloaded') setStatus('The share card was saved as a picture.', 'neutral');
   } catch (e) {
     if (e?.name !== 'AbortError') showNotice('Could not share the card.');
   } finally {
@@ -553,12 +553,16 @@ el.shareBtn.addEventListener('click', async () => {
   }
 });
 
-el.aboutBtn.addEventListener('click', () => { el.clearNote.textContent = ''; el.clearBtn.textContent = 'Clear history'; el.about.showModal(); });
+el.aboutBtn.addEventListener('click', () => {
+  el.clearNote.textContent = '';
+  try { el.clearBtn.disabled = history.entryCount() === 0; } catch { el.clearBtn.disabled = false; }
+  el.about.showModal();
+});
 el.about.addEventListener('click', (e) => { if (e.target === el.about) el.about.close(); });
 el.clearBtn.addEventListener('click', () => {
   history.clearHistory();
-  current?.rated.clear();
   if (current?.result) showHistory(null);
+  el.clearBtn.disabled = true;
   el.clearNote.textContent = 'History cleared.';
 });
 
@@ -651,6 +655,8 @@ async function main() {
   setMode('camera');
   if (!S.supported) return;
 
+  // Works offline after the first visit (not in the test modes, which would cache the test files too)
+  if (!test) registerServiceWorker();
   requestAnimationFrame(loop);
   startCamera();
   await loadModels();
@@ -658,11 +664,6 @@ async function main() {
   if (test === 'perBoy' || test === 'perGirl') {
     const blob = await (await fetch(`../${test}.jpg`)).blob();
     await ratePhotoFile(new File([blob], `${test}.jpg`, { type: 'image/jpeg' }));
-  }
-
-  // Works offline after the first visit (the service worker is added by the PWA module, if it is there)
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    fetch('./sw.js', { method: 'HEAD' }).then((r) => { if (r.ok) navigator.serviceWorker.register('./sw.js'); }).catch(() => {});
   }
 }
 

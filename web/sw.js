@@ -17,7 +17,9 @@ const KEEP = [SHELL_CACHE, MODEL_CACHE, CDN_CACHE];
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/landmarker.js', 'js/overlay.js', 'js/scoring.js', 'js/headpose.js', 'js/facedata.js',
-  'js/tips.js', 'js/history.js', 'js/share.js', 'js/config.js',
+  'js/tips.js', 'js/history.js', 'js/share.js', 'js/config.js', 'js/modules.js',
+  // Stand-ins that modules.js imports until the real scoring, headpose, facedata and tips modules are switched in
+  'js/stubs/scoring.js', 'js/stubs/headpose.js', 'js/stubs/facedata.js', 'js/stubs/tips.js',
   'icons/favicon-32.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 const MODEL = 'face_landmarker.task';
