@@ -590,7 +590,7 @@ class FaceRaterApp:
         self.ratedPicture = None  # the picture the lines below belong to
         self.ratedInfo = {}  # model -> what the history said when this picture was rated against it
         self.tips = None  # the photo tips for ratedPicture
-        self.trend = None  # "up", "down" or None: is the score above your average
+        self.trend = None  # "up", "down" or None: is the score above your previous photo
 
         # Windows' screen scaling (1.0 at 100%). tk scaling is pixels per point, which is 96/72 at 100%
         self.scale = float(self.root.tk.call("tk", "scaling")) / (96 / 72)
@@ -752,9 +752,13 @@ class FaceRaterApp:
         lift = self.fonts["score"].metrics("descent") - self.fonts["scoreUnit"].metrics("descent")
         self.scoreUnit = self.label(scoreRow, "", "scoreUnit", "muted")
         self.scoreUnit.pack(side="left", anchor="s", padx=(px(10), 0), pady=(0, lift))
-        # An arrow with how far the score is above or below your average, on the right of the score
-        self.trendLabel = self.label(scoreRow, "", "bodyBold", "muted")
-        self.trendLabel.pack(side="right", anchor="s", pady=(0, lift))
+        # An arrow with how far the score is above or below your previous photo, on the right of the score
+        trendBox = self.themed_widget(tk.Frame(scoreRow), bg="bg")
+        trendBox.pack(side="right", anchor="s", pady=(0, lift))
+        self.trendLabel = self.label(trendBox, "", "bodyBold", "muted")
+        self.trendLabel.pack(anchor="e")
+        self.trendCaption = self.label(trendBox, "", "tiny", "muted")
+        self.trendCaption.pack(anchor="e")
         # Your best and average for this model face, under the score
         self.historyLabel = self.label(scoreGroup, "", "tiny", "muted", anchor="w")
         self.historyLabel.pack(anchor="w")
@@ -1069,17 +1073,19 @@ class FaceRaterApp:
             self.historyLabel.config(text="")
             self.trend = None
             self.trendLabel.config(text="")
+            self.trendCaption.config(text="")
         else:
             self.historyLabel.config(text=f"Your best: {compare['best']:.1f}  ·  Average: {compare['average']:.1f} "
                                           f"({compare['count']} photos)")
             self.trend = compare["trend"]
             self.trendLabel.config(text="" if self.trend is None else
                                    f"{'▲' if self.trend == 'up' else '▼'} {abs(compare['diff']):.1f}")
+            self.trendCaption.config(text="" if self.trend is None else "since last photo")
             self.color_trend()
         self.streakLabel.config(text=f"Day streak: {info['streak']}" if info["streak"] >= STREAK_SHOWN_FROM else "")
 
     def color_trend(self):
-        # Above your average is the high-score colour, below it the low-score colour
+        # Above your previous photo is the high-score colour, below it the low-score colour
         colour = self.colors["scoreHigh"] if self.trend == "up" else self.colors["scoreLow"] if self.trend == "down" else self.colors["muted"]
         self.trendLabel.config(fg=colour)
 

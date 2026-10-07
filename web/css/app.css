@@ -278,7 +278,8 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
   color: var(--faint);
 }
 .score .unit { color: var(--muted); font-size: 22px; font-weight: 500; }
-.score .trend { margin-left: auto; font-weight: 600; font-size: 15px; color: var(--muted); }
+.score .trend { margin-left: auto; font-weight: 600; font-size: 15px; color: var(--muted); text-align: right; }
+.score .trend::after { content: "since last photo"; display: block; font-weight: 400; font-size: 11.5px; color: var(--muted); }
 .score[data-band="high"] .num { color: var(--score-high); }
 .score[data-band="low"] .num { color: var(--score-low); }
 .score[data-band="mid"] .num { color: var(--text); }

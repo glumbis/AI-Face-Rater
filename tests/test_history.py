@@ -53,17 +53,32 @@ def test_clear(tmp_path):
 
 
 def test_compare_best_average_and_trend(tmp_path):
-    add(tmp_path, "boy", 6.0)
+    add(tmp_path, "boy", 6.0, daysAgo=1)
     add(tmp_path, "boy", 8.0)
     add(tmp_path, "girl", 2.0)  # another model face doesn't count
     before = history.load(str(tmp_path))
     up = history.compare(before, "boy", 8.5)
     assert up["trend"] == "up" and up["count"] == 3 and up["best"] == 8.5
-    assert abs(up["average"] - 22.5 / 3) < 1e-9 and abs(up["diff"] - 1.5) < 1e-9
-    assert history.compare(before, "boy", 5.0)["trend"] == "down"
-    assert history.compare(before, "boy", 7.05)["trend"] is None
+    assert abs(up["average"] - 22.5 / 3) < 1e-9
+    # The arrow compares with the previous photo (8.0), not the average (7.0)
+    assert abs(up["diff"] - 0.5) < 1e-9
+    down = history.compare(before, "boy", 7.0)
+    assert down["trend"] == "down" and abs(down["diff"] + 1.0) < 1e-9
+    assert history.compare(before, "boy", 8.05)["trend"] is None
+    assert history.compare(before, "boy", 7.95)["trend"] is None
     assert history.compare([], "boy", 7.0) is None
     assert history.compare(before, "girl", 3.0)["count"] == 2
+
+
+def test_arrow_compares_with_the_previous_photo_of_the_same_model_face(tmp_path):
+    add(tmp_path, "boy", 9.0, daysAgo=2)
+    add(tmp_path, "girl", 3.0, daysAgo=1)  # a later photo, but for another model face
+    add(tmp_path, "boy", 5.0)
+    before = history.load(str(tmp_path))
+    compare = history.compare(before, "boy", 5.6)
+    assert compare["trend"] == "up" and abs(compare["diff"] - 0.6) < 1e-9
+    assert history.compare(before, "girl", 3.0)["trend"] is None  # no change from 3.0
+    assert history.compare(before, "girl", 2.0)["trend"] == "down"
 
 
 def test_streak(tmp_path):

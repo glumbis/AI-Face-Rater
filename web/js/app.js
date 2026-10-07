@@ -216,8 +216,8 @@ function showHistory(st) {
     el.historyLine.textContent = '';
   }
   if (st?.trend === 'up' || st?.trend === 'down') {
-    const diff = typeof st.diff === 'number' ? ` ${fmt(Math.abs(st.diff))}` : '';
-    el.trend.textContent = `${st.trend === 'up' ? '▲' : '▼'}${diff}`;
+    // "since last photo" is added under it by the CSS
+    el.trend.textContent = `${st.trend === 'up' ? '▲' : '▼'} ${fmt(Math.abs(st.diff))}`;
     el.trend.dataset.trend = st.trend;
     el.trend.hidden = false;
   } else {
