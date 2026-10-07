@@ -96,17 +96,19 @@ def evaluate(img, points, matrix):
     symmetryPenalty = ld.SYMMETRY_PENALTY * (1 - sym)
     refs = {}
     for name in REFERENCES:
-        errors = ld.model_errors(xs, ys, name, zs)
-        err, modelFace = ld.closest_model_face(xs, ys, name, zs)
+        fits = ld.model_fits(xs, ys, name, zs)
+        err, modelFace, aligned, perfect = min(fits, key=lambda fit: fit[0])
+        regions = ld.region_scores(aligned, perfect)
         score = float(np.clip(ld.score_from_error(err + skinPenalty + symmetryPenalty), 0, 10))
-        refs[name] = {"shapeError": err, "score": score, "modelFace": modelFace, "modelFaceCount": len(errors),
-                      "errors": [e for e, _ in errors]}
+        refs[name] = {"shapeError": err, "score": score, "modelFace": modelFace, "modelFaceCount": len(fits),
+                      "errors": [fit[0] for fit in fits], "regions": regions}
         for source in SOURCES:
             # Check against the real thing, which does the whole detection again
             if refusal[source] is None:
                 full = ld.rate_face(img, name, source)
                 assert abs(full["score"] - score) < 1e-3 and abs(full["shapeError"] - err) < 1e-4, (name, full["score"], score)
-                assert full["modelFace"] == modelFace and full["modelFaceCount"] == len(errors)
+                assert full["modelFace"] == modelFace and full["modelFaceCount"] == len(fits)
+                assert all(abs(full["regions"][r] - regions[r]) < 1e-3 for r in regions) and full["regions"].keys() == regions.keys()
             else:
                 try:
                     ld.rate_face(img, name, source)

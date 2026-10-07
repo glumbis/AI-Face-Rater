@@ -8,7 +8,7 @@ import sys
 from collections import namedtuple
 
 from facelayout import (EYE_CORNERS, FACE_WIDTH_POINTS, LEFT_CHEEK_POINTS, MIRROR_PAIRS, NOSE_BRIDGE_POINTS,
-                        POINT_WEIGHTS as _POINT_WEIGHTS, RIGHT_CHEEK_POINTS, SUBSET, position)
+                        POINT_WEIGHTS as _POINT_WEIGHTS, REGION_POINTS, RIGHT_CHEEK_POINTS, SUBSET, position)
 import modelfaces
 import overlay
 from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
@@ -449,32 +449,40 @@ def around(middle, step, reach):
     n = round(reach / step)
     return [middle + i * step for i in range(-n, n + 1)]
 
-def face_error(points, perfect):
+def face_fit(points, perfect):
     # The difference between the face (162 x 3, or 162 x 2 without depth) and one model face (162 x 2) after lining
-    # them up, with the head turned back the way that fits best (see TILT_SEARCH), as a share of the model face's eye width
+    # them up, with the head turned back the way that fits best (see TILT_SEARCH), as a share of the model face's eye
+    # width. Returns that error and the face as it was lined up (162 x 2), for region_scores
     if points.shape[1] < 3:
-        return weighted_rms(align(points, perfect), perfect) / eye_width(perfect)
+        aligned = align(points, perfect)
+        return weighted_rms(aligned, perfect) / eye_width(perfect), aligned
     def error(tilt, turn):
         return weighted_rms(align(posed(points, tilt, turn), perfect), perfect)
     tilt = min(around(0, POSE_STEP, TILT_SEARCH), key=lambda t: error(t, 0))
     turn = min(around(0, POSE_STEP, TURN_SEARCH), key=lambda u: error(tilt, u))
     tilt = min(around(tilt, POSE_FINE_STEP, POSE_STEP), key=lambda t: error(t, turn))
     turn = min(around(turn, POSE_FINE_STEP, POSE_STEP), key=lambda u: error(tilt, u))
-    return error(tilt, turn) / eye_width(perfect)
+    return error(tilt, turn) / eye_width(perfect), align(posed(points, tilt, turn), perfect)
 
-def model_errors(xList, yList, gender, zList=None):
-    # How different the face's shape is from each model face of the gender, as a list of (error, name). The error is a
-    # share of the model face's eye width (0 = identical). zList is the landmarks' depth, without it no tilt is tried
+def model_fits(xList, yList, gender, zList=None):
+    # How different the face's shape is from each model face of the gender, as a list of (error, name, aligned face,
+    # model face). The error is a share of the model face's eye width (0 = identical). zList is the landmarks' depth,
+    # without it no tilt is tried
     selfie = np.column_stack([xList, yList] if zList is None else [xList, yList, zList]).astype(np.float64)
     # A face looks just as good in a mirror, and a mirrored photo (like from a selfie camera) shouldn't change
     # the score, so compare the face both ways round and keep the closest
     mirrored = selfie[MIRROR_PAIRS]
     mirrored[:, 0] *= -1
-    errors = []
+    fits = []
     for face in model_faces(gender):
         perfect = np.column_stack([face["x"], face["y"]]).astype(np.float64)
-        errors.append((float(min(face_error(selfie, perfect), face_error(mirrored, perfect))), face["name"]))
-    return errors
+        error, aligned = min(face_fit(selfie, perfect), face_fit(mirrored, perfect), key=lambda fit: fit[0])
+        fits.append((float(error), face["name"], aligned, perfect))
+    return fits
+
+def model_errors(xList, yList, gender, zList=None):
+    # (error, name) for each model face of the gender (see model_fits)
+    return [(error, name) for error, name, _, _ in model_fits(xList, yList, gender, zList)]
 
 def closest_model_face(xList, yList, gender, zList=None):
     # (error, name) of the model face of the gender that the face is most like
@@ -487,6 +495,15 @@ def shape_error(xList, yList, gender, zList=None):
 def score_from_error(err):
     # Turns an error into a score from 0 to 10, an exact match gives 10 (see SCORE_MID)
     return 10 / (1 + (err / SCORE_MID) ** SCORE_POWER)
+
+def region_scores(aligned, perfect):
+    # A score from 0 to 10 for each region that counts (jaw, brows, nose, eyes, outerLips), to show which parts of the
+    # face are closest to the model face and which are furthest. It uses the same lined-up face as the total, so each
+    # region's error is measured the same way (its own weighted RMS, as a share of the model face's eye width) and
+    # turned into a score the same way, which makes the numbers comparable to the main score
+    size = eye_width(perfect)
+    return {name: float(score_from_error(weighted_rms(aligned[points], perfect[points], POINT_WEIGHTS[points]) / size))
+            for name, points in REGION_POINTS.items()}
 
 def symmetry(xList, yList):
     # Returns 0 (very lopsided) to 1 (perfectly symmetric).
@@ -505,8 +522,9 @@ def rate_face(img, gender, source="camera"):
     # which may have a smaller one (MIN_FACE_SIZE_FILE).
     # Returns a dict with score (0 to 10), shapeError, modelFace (the name of the closest model face, like "Boy 3"),
     # modelFaceCount (how many model faces that gender has), clarity (None if the cheeks couldn't be judged),
-    # skinPenalty, skinFactor, symmetry, symmetryPenalty, symmetryFactor and picture (a copy with the landmarks and
-    # cheek squares drawn on it). Raises FaceError if it can't be rated.
+    # skinPenalty, skinFactor, symmetry, symmetryPenalty, symmetryFactor, regions (a score from 0 to 10 for jaw, brows,
+    # nose, eyes and outerLips, against that same model face, see region_scores) and picture (a copy with the landmarks
+    # and cheek squares drawn on it). Raises FaceError if it can't be rated.
     img = limit_size(img)
 
     found = detect_face(img)
@@ -532,8 +550,8 @@ def rate_face(img, gender, source="camera"):
 
     clarity = skin_clarity(img, picture, selfieX, selfieY)
 
-    errors = model_errors(selfieX, selfieY, gender, found.zList)
-    shapeError, modelFace = min(errors, key=lambda error: error[0])
+    fits = model_fits(selfieX, selfieY, gender, found.zList)
+    shapeError, modelFace, aligned, perfect = min(fits, key=lambda fit: fit[0])
 
     # Uneven skin and a lopsided face count as a little extra shape error. There's no penalty when the cheeks
     # couldn't be judged, so a hidden cheek or a beard doesn't lower the score
@@ -549,9 +567,10 @@ def rate_face(img, gender, source="camera"):
     # Odd landmarks (for example all on top of each other) could give "not a number", count that as 0
     score = 0.0 if np.isnan(score) else float(np.clip(score, 0, 10))
 
-    return {"score": score, "shapeError": shapeError, "modelFace": modelFace, "modelFaceCount": len(errors),
+    return {"score": score, "shapeError": shapeError, "modelFace": modelFace, "modelFaceCount": len(fits),
             "clarity": clarity, "skinPenalty": skinPenalty, "skinFactor": skinFactor, "symmetry": faceSymmetry,
-            "symmetryPenalty": symmetryPenalty, "symmetryFactor": symmetryFactor, "picture": picture}
+            "symmetryPenalty": symmetryPenalty, "symmetryFactor": symmetryFactor,
+            "regions": region_scores(aligned, perfect), "picture": picture}
 
 
 def main():

@@ -347,6 +347,58 @@ def test_rate_face_result_has_the_expected_keys(boy_img):
     assert picture.ndim == 3 and picture.shape[2] == 3 and picture.dtype == np.uint8
 
 
+# ---------- the score of each region ----------
+
+COUNTED_REGIONS = [name for name, weight in facelayout.REGION_WEIGHTS.items() if weight > 0]
+
+
+def best_fit(xList, yList, gender):
+    # (aligned face, model face) of the closest model face
+    _, _, aligned, perfect = min(landmarkdetect.model_fits(xList, yList, gender), key=lambda fit: fit[0])
+    return aligned, perfect
+
+
+def test_the_regions_are_the_ones_that_count(boy_img):
+    # The inner lips have no weight, so they get no score
+    assert "innerLips" not in COUNTED_REGIONS
+    regions = rate_face(boy_img, "boy")["regions"]
+    assert list(regions) == COUNTED_REGIONS == list(facelayout.REGION_POINTS)
+    assert all(0 <= score <= 10 for score in regions.values())
+
+
+def test_a_model_face_scores_itself_ten_in_every_region():
+    for gender in landmarkdetect.MODEL_FACES:
+        for face in model_faces(gender):
+            scores = landmarkdetect.region_scores(*best_fit(face["x"], face["y"], gender))
+            assert list(scores) == COUNTED_REGIONS
+            assert all(score == pytest.approx(10, abs=1e-6) for score in scores.values())
+
+
+def test_the_same_face_in_a_photo_scores_high_in_every_region(boy_img, girl_img):
+    for img, gender in ((boy_img, "boy"), (girl_img, "girl")):
+        assert min(rate_face(img, gender)["regions"].values()) > 9
+
+
+@pytest.mark.parametrize("region", ["jaw", "brows", "outerLips"])
+def test_the_region_that_is_off_scores_lowest(region):
+    # Moving one region up by a tenth of the eye width (the nose and eyes are lined up with the most weight, so this is
+    # for the regions the alignment doesn't follow) makes that region the weakest of the face
+    for gender in landmarkdetect.MODEL_FACES:
+        face = model_faces(gender)[0]
+        x, y = np.array(face["x"], dtype=float), np.array(face["y"], dtype=float)
+        y[facelayout.REGION_POINTS[region]] -= 0.1 * landmarkdetect.eye_width(np.column_stack([x, y]))
+        scores = landmarkdetect.region_scores(*best_fit(x.tolist(), y.tolist(), gender))
+        assert min(scores, key=scores.get) == region and scores[region] < 2
+
+
+def test_the_regions_are_measured_against_the_closest_model_face(boy_img, girl_img, monkeypatch):
+    # With the girl face as the only boy model face the regions are the ones against that face (and it scores low)
+    girl, boy = model_faces("girl")[0], model_faces("boy")[0]
+    monkeypatch.setitem(modelfaces.FACES, "boy", [dict(girl, name="Boy 1")])
+    assert rate_face(girl_img, "boy")["regions"] == pytest.approx(rate_face(girl_img, "girl")["regions"], abs=0.2)
+    assert max(rate_face(boy_img, "boy")["regions"].values()) < 9
+
+
 def test_the_result_picture_has_the_landmarks_drawn_on_it(boy_img):
     picture = rate_face(boy_img, "boy")["picture"]
     changed = (picture != boy_img).any(axis=2)

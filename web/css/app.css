@@ -310,6 +310,17 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
 .bar { height: 6px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: var(--track); }
 .bar i { display: block; width: 0; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.5s cubic-bezier(.2,.8,.2,1); }
 
+/* The score of each region of the face, best first: five small columns, each with a name, a number and a thin bar */
+.regions .row small { color: var(--muted); font-size: 12.5px; }
+.regions ul { margin: 8px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.regions li { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; color: var(--muted); }
+.regions b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
+.regions li[data-rank] b { color: var(--text); }
+.regions .bar { display: block; height: 4px; margin-top: 4px; }
+.regions li[data-rank="best"] b { color: var(--score-high); }
+.regions li[data-rank="worst"] b { color: var(--score-low); }
+.regions li[data-rank="worst"] .bar i { background: var(--score-low); }
+
 .legend {
   display: flex;
   flex-wrap: wrap;

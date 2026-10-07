@@ -2,10 +2,11 @@
 // facedata.js, which tools/export_web_data.py writes from the Python modules.
 //
 // rateFace(imageData, points478px, matrix, reference, source = "camera") -> { score, clarity, symmetry, shapeError,
-//   modelFace, modelFaceCount, skinPenalty, symmetryPenalty, skinFactor, symmetryFactor,
+//   modelFace, modelFaceCount, skinPenalty, symmetryPenalty, skinFactor, symmetryFactor, regions,
 //   cheeks: [{ x1, y1, x2, y2, w, h, square, fraction, mask }] }
 // The face gets the score of the model face of that gender it is most like: modelFace is its name ("Boy 3") and
-// modelFaceCount how many that gender has.
+// modelFaceCount how many that gender has. regions is a score from 0 to 10 for each of jaw, brows, nose, eyes and
+// outerLips against that same model face ({ jaw: 4.1, ... }), see regionScores().
 // or throws FaceError(message) (error.name === "FaceError"). source is "camera" or "file": a face that is too small is
 // refused (camera: CONST.MIN_FACE_SIZE, file: CONST.MIN_FACE_SIZE_FILE) before the head angles are checked.
 // clarity is null when the cheeks could not be judged (then there is no skin penalty).
@@ -15,8 +16,8 @@
 // The picture should be no bigger than CONST.MAX_PICTURE_SIZE on the long side (shrink it before looking for the face,
 // as the Python app does).
 import {
-  CHEEK_LEFT, CHEEK_RIGHT, CONST, EYE_OUTER, FACE_WIDTH, MIRROR, MODEL_FACE_NAMES, MODEL_FACES, NOSE_BRIDGE, SUBSET,
-  WEIGHTS,
+  CHEEK_LEFT, CHEEK_RIGHT, CONST, EYE_OUTER, FACE_WIDTH, MIRROR, MODEL_FACE_NAMES, MODEL_FACES, NOSE_BRIDGE,
+  REGION_POINTS, SUBSET, WEIGHTS,
 } from './facedata.js';
 import { facingProblem, headAngles } from './headpose.js';
 import {
@@ -122,22 +123,27 @@ function best(values, error) {
 }
 
 // The difference between the face (162 points, with depth or without) and one model face (162 [x, y]) after lining
-// them up, with the head turned back the way that fits best (CONST.TILT_SEARCH), as a share of the model's eye width
-function faceError(points, model) {
-  if (points[0].length < 3) return weightedRms(align(points, model), model) / eyeWidth(model);
+// them up, with the head turned back the way that fits best (CONST.TILT_SEARCH), as a share of the model's eye width.
+// Returns { error, aligned } with the face as it was lined up (162 [x, y]), for regionScores()
+function faceFit(points, model) {
+  if (points[0].length < 3) {
+    const aligned = align(points, model);
+    return { error: weightedRms(aligned, model) / eyeWidth(model), aligned };
+  }
   const error = (tilt, turn) => weightedRms(align(posed(points, tilt, turn), model), model);
   const { TILT_SEARCH, TURN_SEARCH, POSE_STEP, POSE_FINE_STEP } = CONST;
   let tilt = best(around(0, POSE_STEP, TILT_SEARCH), (t) => error(t, 0));
   let turn = best(around(0, POSE_STEP, TURN_SEARCH), (u) => error(tilt, u));
   tilt = best(around(tilt, POSE_FINE_STEP, POSE_STEP), (t) => error(t, turn));
   turn = best(around(turn, POSE_FINE_STEP, POSE_STEP), (u) => error(tilt, u));
-  return error(tilt, turn) / eyeWidth(model);
+  return { error: error(tilt, turn) / eyeWidth(model), aligned: align(posed(points, tilt, turn), model) };
 }
 
-// How different the face shape is from each model face of the gender: [{ error, name }], the error as a share of the
-// model's eye width. points: 162 points (or all 478, which are reduced here), [x, y] or [x, y, depth] (without the
-// depth the head isn't turned back). reference: "boy" or "girl", or one model face as a list of 162 [x, y] pairs
-export function modelErrors(points, reference) {
+// How different the face shape is from each model face of the gender: [{ error, name, aligned, model }], the error as a
+// share of the model's eye width. points: 162 points (or all 478, which are reduced here), [x, y] or [x, y, depth]
+// (without the depth the head isn't turned back). reference: "boy" or "girl", or one model face as a list of 162 [x, y]
+// pairs. aligned is the face lined up with that model face
+function modelFits(points, reference) {
   const pts = points.length === 162 ? points : subsetPoints(points);
   const gender = typeof reference === 'string' ? reference.toLowerCase() : null;
   const models = gender === null ? [reference] : MODEL_FACES[gender];
@@ -145,18 +151,37 @@ export function modelErrors(points, reference) {
   const names = gender === null ? ['Model face'] : MODEL_FACE_NAMES[gender];
   const mirrored = mirrorOf(pts);
   // A mirrored photo should score the same, so keep the closer of the face and its mirror image
-  return models.map((model, i) => ({
-    error: Math.min(faceError(pts, model), faceError(mirrored, model)), name: names[i],
-  }));
+  return models.map((model, i) => {
+    const a = faceFit(pts, model), b = faceFit(mirrored, model);
+    const fit = b.error < a.error ? b : a;
+    return { error: fit.error, name: names[i], aligned: fit.aligned, model };
+  });
 }
+
+// modelFits without the lined-up face: [{ error, name }]
+export const modelErrors = (points, reference) => modelFits(points, reference).map(({ error, name }) => ({ error, name }));
 
 // The model face of the gender that the face is most like: { error, name } (the first one if two are as close)
 export function closestModelFace(points, reference) {
-  return modelErrors(points, reference).reduce((a, b) => (b.error < a.error ? b : a));
+  const { error, name } = modelFits(points, reference).reduce((a, b) => (b.error < a.error ? b : a));
+  return { error, name };
 }
 
 // The shape error against the closest model face of the gender
 export const shapeError = (points, reference) => closestModelFace(points, reference).error;
+
+// A score from 0 to 10 for each region that counts (jaw, brows, nose, eyes, outerLips): the region's own weighted RMS
+// error in the lined-up face (as a share of the model's eye width) through scoreFromError, so the numbers are
+// comparable to the main score (region_scores in landmarkdetect.py)
+export function regionScores(aligned, model) {
+  const size = eyeWidth(model);
+  const scores = {};
+  for (const [name, idx] of Object.entries(REGION_POINTS)) {
+    const error = weightedRms(idx.map((i) => aligned[i]), idx.map((i) => model[i]), idx.map((i) => WEIGHTS[i])) / size;
+    scores[name] = scoreFromError(error);
+  }
+  return scores;
+}
 
 // 0 (very lopsided) to 1 (symmetric)
 export function symmetry(points) {
@@ -365,8 +390,8 @@ export function rateFace(imageData, points478px, matrix, reference, source = 'ca
   if (problem !== null) throw new FaceError(CONST.REFUSED_MESSAGES[problem]);
 
   const { clarity, cheeks } = skinClarity(imageData, pts);
-  const errors = modelErrors(pts, reference);
-  const closest = errors.reduce((a, b) => (b.error < a.error ? b : a));
+  const fits = modelFits(pts, reference);
+  const closest = fits.reduce((a, b) => (b.error < a.error ? b : a));
   const err = closest.error;
   const skinPenalty = clarity === null ? 0 : CONST.SKIN_PENALTY * (1 - clarity);
   const sym = symmetry(pts);
@@ -377,7 +402,7 @@ export function rateFace(imageData, points478px, matrix, reference, source = 'ca
   const symmetryFactor = score / scoreFromError(err + skinPenalty);
   score = Number.isNaN(score) ? 0 : Math.min(Math.max(score, 0), 10);
   return {
-    score, shapeError: err, modelFace: closest.name, modelFaceCount: errors.length, clarity, skinPenalty, skinFactor,
-    symmetry: sym, symmetryPenalty, symmetryFactor, cheeks,
+    score, shapeError: err, modelFace: closest.name, modelFaceCount: fits.length, clarity, skinPenalty, skinFactor,
+    symmetry: sym, symmetryPenalty, symmetryFactor, regions: regionScores(closest.aligned, closest.model), cheeks,
   };
 }

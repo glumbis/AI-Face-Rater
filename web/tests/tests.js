@@ -1,5 +1,5 @@
 // Runs the website's scoring.js and headpose.js on golden.json (made by tools/make_golden.py from the Python app).
-// Tolerances: score 0.05, clarity 0.02, angles 0.2 degrees (the real differences are far smaller, see the Max rows).
+// Tolerances: score 0.05 (also each region's score), clarity 0.02, angles 0.2 degrees (the real differences are far smaller, see the Max rows).
 import { SOURCE_HASH } from '../js/facedata.js';
 import {
   HeadTracker, RecentFrames, facingProblem, headAngles, sharpness,
@@ -12,7 +12,7 @@ import {
   symmetry,
 } from '../js/scoring.js';
 
-const TOL = { score: 0.05, clarity: 0.02, angle: 0.2, shapeError: 1e-4, symmetry: 0.002, size: 1e-9, sharp: 1e-3 };
+const TOL = { score: 0.05, region: 0.05, clarity: 0.02, angle: 0.2, shapeError: 1e-4, symmetry: 0.002, size: 1e-9, sharp: 1e-3 };
 const MASK_MISMATCH = 0.01; // share of a cheek's pixels that may differ
 
 const rows = [];
@@ -155,6 +155,10 @@ async function testCase(c) {
         near(g, `${label} score`, 'score', r.score, want.score, TOL.score);
         record(g, `${label} closest model face`, r.modelFace === want.modelFace && r.modelFaceCount === want.modelFaceCount,
           `got ${r.modelFace} of ${r.modelFaceCount}, want ${want.modelFace} of ${want.modelFaceCount}`);
+        record(g, `${label} regions`, Object.keys(r.regions).join() === Object.keys(want.regions).join(), Object.keys(r.regions).join());
+        for (const [region, wantScore] of Object.entries(want.regions)) {
+          near(g, `${label} ${region} score`, 'region score', r.regions[region], wantScore, TOL.region);
+        }
         near(g, `${label} clarity`, 'clarity', r.clarity, e.clarity, TOL.clarity);
         near(g, `${label} skin penalty`, 'penalty', r.skinPenalty, e.skinPenalty, 1e-3);
         near(g, `${label} symmetry penalty`, 'penalty', r.symmetryPenalty, e.symmetryPenalty, 1e-3);

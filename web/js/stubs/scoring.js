@@ -51,6 +51,7 @@ export function rateFace(imageData, points, matrix, reference, source = 'camera'
   };
   return {
     score, clarity: 0.82, symmetry: sym, shapeError: 0.1, skinPenalty: 0.003, symmetryPenalty: 0.001,
+    regions: { jaw: 5.0, brows: 7.2, nose: 8.4, eyes: 9.1, outerLips: 6.3 },
     cheeks: [cheek(points[50]), cheek(points[280])],
   };
 }
