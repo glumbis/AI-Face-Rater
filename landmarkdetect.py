@@ -9,7 +9,7 @@ from collections import namedtuple
 
 from facelayout import (BOY_PERFECT_X, BOY_PERFECT_Y, EYE_CORNERS, FACE_WIDTH_POINTS, GIRL_PERFECT_X, GIRL_PERFECT_Y,
                         LEFT_CHEEK_POINTS, MIRROR_PAIRS, NOSE_BRIDGE_POINTS, POINT_WEIGHTS as _POINT_WEIGHTS,
-                        RIGHT_CHEEK_POINTS, SUBSET)
+                        RIGHT_CHEEK_POINTS, SUBSET, position)
 from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
 
 # ---------- Put the path to the picture you want to rate here ----------
@@ -157,6 +157,49 @@ def draw_landmarks(img, xList, yList):
 
 
 # Head direction (head_angles, facing_problem and the limits) is in headpose.py
+
+
+# ---------- How close the face is ----------
+# The size of the face is its height (top of the forehead to the chin, landmarks 10 and 152) as a share of the
+# picture's shorter side: for a webcam picture that is the height of the frame, and a portrait photo is measured against
+# its width. Real faces are about 17 cm from the forehead point to the chin, and a laptop webcam (about 70 degrees wide,
+# 16:9 or 4:3) sees a face at 40 cm as 0.40 to 0.55, at 50 cm 0.33 to 0.43, at 60 cm 0.27 to 0.36 and at 80 cm only
+# 0.20 to 0.27 of the frame height. The model faces (tight portraits) are 0.52 to 0.90.
+FACE_HEIGHT_POINTS = (position(10), position(152))
+# A webcam picture is refused when the face is smaller than this, which is about 55 to 70 cm away
+MIN_FACE_SIZE = 0.30
+# The live preview says to move a little closer when it is smaller than this (about 50 to 60 cm away), and stops saying
+# it when it is HINT_SIZE_MARGIN bigger, so the tip doesn't flicker
+HINT_FACE_SIZE = 0.35
+HINT_SIZE_MARGIN = 0.02
+# A picked photo may have a smaller face: a normal portrait is 0.2 to 0.6 of the picture, a head-and-shoulders photo
+# taken from a distance 0.15 to 0.2, but a face in a group photo is mostly under 0.1
+MIN_FACE_SIZE_FILE = 0.15
+
+SIZE_MESSAGES = {
+    "near": "Move a little closer.",
+    "far": "Move closer to the camera.",
+}
+# What it says when a picked photo is refused (telling someone to move closer to the camera makes no sense for a photo)
+FILE_TOO_SMALL_MESSAGE = "The face is too small in this photo. Use a photo where the face fills more of the picture."
+
+
+def face_size(xList, yList, shape):
+    # How much of the picture the face fills: the face height as a share of the shorter side of the picture (shape
+    # is the picture's shape). 0.5 is a face half as tall as the picture
+    top, chin = FACE_HEIGHT_POINTS
+    return float(abs(yList[chin] - yList[top]) / min(shape[:2]))
+
+
+def size_problem(size, current=None):
+    # What to tell the live preview about the distance: None (fine), "near" (a little closer) or "far" (much closer).
+    # current is what is showing now. It stays until the face has grown a margin past the limit (so no flickering)
+    margin = HINT_SIZE_MARGIN
+    if size < MIN_FACE_SIZE + (margin if current == "far" else 0):
+        return "far"
+    if size < HINT_FACE_SIZE + (margin if current in ("near", "far") else 0):
+        return "near"
+    return None
 
 
 # ---------- Skin clarity (cheeks) ----------
@@ -413,8 +456,10 @@ def symmetry(xList, yList):
     return float(1 - min(asymmetry / SYMMETRY_WORST, 1))
 
 
-def rate_face(img, gender):
+def rate_face(img, gender, source="camera"):
     # Rates the face in img against the boy, girl or average model face (gender is "boy", "girl" or "average").
+    # source is "camera" for a webcam picture, which needs a big face (MIN_FACE_SIZE), or "file" for a picked photo,
+    # which may have a smaller one (MIN_FACE_SIZE_FILE).
     # Returns a dict with score (0 to 10), shapeError, clarity (None if the cheeks couldn't be judged), skinPenalty,
     # skinFactor, symmetry, symmetryPenalty, symmetryFactor and picture (a copy with the landmarks and cheek
     # squares drawn on it). Raises FaceError if it can't be rated.
@@ -428,6 +473,14 @@ def rate_face(img, gender):
     if found is None:
         raise FaceError("No face found. Face the camera with a straight face.")
     selfieX, selfieY = found.xList, found.yList
+
+    # Too far away is checked first: it is what to fix first, and the angles of a small face are less reliable
+    size = face_size(selfieX, selfieY, img.shape)
+    if source == "camera":
+        if size < MIN_FACE_SIZE:
+            raise FaceError(SIZE_MESSAGES["far"])
+    elif size < MIN_FACE_SIZE_FILE:
+        raise FaceError(FILE_TOO_SMALL_MESSAGE)
 
     problem = facing_problem(found.angles)
     if problem is not None:
@@ -479,7 +532,7 @@ def main():
         sys.exit()
 
     try:
-        result = rate_face(selfiePic, gender)
+        result = rate_face(selfiePic, gender, source="file")
     except FaceError as e:
         print(e)
         time.sleep(7)

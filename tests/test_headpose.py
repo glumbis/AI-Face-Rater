@@ -75,7 +75,7 @@ def test_a_matrix_that_is_no_use_gives_no_angles(matrix):
     assert hp.head_angles(matrix) is None
 
 
-@pytest.mark.parametrize("turn", [-35, 35])
+@pytest.mark.parametrize("turn", [-35, -14, 14, 35])
 def test_a_head_turned_far_is_refused(turn):
     assert hp.facing_problem(hp.head_angles(raw(turn, 0))) == "side"
 
@@ -83,10 +83,19 @@ def test_a_head_turned_far_is_refused(turn):
 def test_a_head_tilted_far_down_or_up_is_refused():
     assert hp.facing_problem(hp.head_angles(raw(0, 35))) == "down"
     assert hp.facing_problem(hp.head_angles(raw(0, -35))) == "up"
+    assert hp.facing_problem(hp.head_angles(raw(0, 17))) == "down"
+    assert hp.facing_problem(hp.head_angles(raw(0, -17))) == "up"
 
 
 def test_a_slightly_turned_head_is_still_rated():
     assert hp.facing_problem(hp.head_angles(raw(10, 8))) is None
+    assert hp.facing_problem(hp.head_angles(raw(0, 13))) is None
+    assert hp.facing_problem(hp.head_angles(raw(0, -13))) is None
+
+
+def test_the_limits_are_ordered_as_intended():
+    assert hp.HINT_TURN < hp.MAX_TURN and hp.HINT_TILT < hp.MAX_TILT
+    assert hp.HINT_MARGIN < hp.HINT_TURN
 
 
 def test_no_angles_means_nothing_is_refused():
@@ -145,24 +154,24 @@ def test_one_wild_picture_gives_no_tip():
 
 
 def test_a_turned_head_gets_a_tip():
-    results = feed(hp.HeadTracker(), [(20, 0)] * 12)
+    results = feed(hp.HeadTracker(), [(11, 0)] * 12)
     assert results[-1] == "side"
 
 
 def test_tip_stays_between_the_limits_and_goes_when_clearly_back():
     tracker = hp.HeadTracker()
-    feed(tracker, [(20, 0)] * 12)
+    feed(tracker, [(11, 0)] * 12)
     assert tracker.problem == "side"
-    # 13 degrees: under the limit that makes it come (15), but not clearly back, so it stays
-    assert feed(tracker, [(13, 0)] * 12, start=2.0)[-1] == "side"
-    assert feed(tracker, [(5, 0)] * 12, start=4.0)[-1] is None
-    # and 13 degrees on its own doesn't make it come
-    assert feed(tracker, [(13, 0)] * 12, start=6.0)[-1] is None
+    # 7 degrees: under the limit that makes it come (8), but not clearly back, so it stays
+    assert feed(tracker, [(7, 0)] * 12, start=2.0)[-1] == "side"
+    assert feed(tracker, [(3, 0)] * 12, start=4.0)[-1] is None
+    # and 7 degrees on its own doesn't make it come
+    assert feed(tracker, [(7, 0)] * 12, start=6.0)[-1] is None
 
 
 def test_chin_tips_say_which_way():
-    assert feed(hp.HeadTracker(), [(0, 20)] * 12)[-1] == "down"
-    assert feed(hp.HeadTracker(), [(0, -20)] * 12)[-1] == "up"
+    assert feed(hp.HeadTracker(), [(0, 12)] * 12)[-1] == "down"
+    assert feed(hp.HeadTracker(), [(0, -12)] * 12)[-1] == "up"
 
 
 def test_old_angles_are_forgotten():

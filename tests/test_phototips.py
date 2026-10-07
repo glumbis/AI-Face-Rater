@@ -70,6 +70,27 @@ def test_face_size():
     assert pt.face_size(BOX, (480, 640)) < pt.TOO_CLOSE_ABOVE
 
 
+def test_far_tip_matches_the_limits_for_rating():
+    from landmarkdetect import HINT_FACE_SIZE, MIN_FACE_SIZE, MIN_FACE_SIZE_FILE
+    from headpose import HINT_TILT, HINT_TURN, MAX_TILT, MAX_TURN
+
+    def far_tips(height, source):
+        # a face `height` of the picture's 480 pixels high
+        m = measure(picture(), box=(220, 100, 420, 100 + round(height * 480)))
+        m["source"] = source
+        return pt.pick_tips(m, maxTips=9)
+
+    # A webcam face is refused under MIN_FACE_SIZE, between that and the preview's hint it gets the same advice,
+    # and bigger than that it gets none
+    assert "far" in far_tips(MIN_FACE_SIZE + 0.01, "camera") and "far" not in far_tips(HINT_FACE_SIZE + 0.02, "camera")
+    # A photo only gets a tip when it is smaller than a normal portrait, and never one about moving closer
+    assert "small" in far_tips(MIN_FACE_SIZE_FILE + 0.01, "file") and "far" not in far_tips(MIN_FACE_SIZE_FILE + 0.01, "file")
+    assert "small" not in far_tips(0.4, "file") and "small" not in far_tips(0.2, "camera")
+    assert pt.TOO_FAR_BELOW > MIN_FACE_SIZE and pt.TOO_FAR_BELOW_FILE > MIN_FACE_SIZE_FILE
+    # The head tips come with the preview's tips and always before the limits where a picture is refused
+    assert (pt.TURN_TIP, pt.TILT_TIP) == (HINT_TURN, HINT_TILT) and HINT_TURN < MAX_TURN and HINT_TILT < MAX_TILT
+
+
 def test_at_most_two_tips_most_important_first():
     m = measure(cv2.GaussianBlur(picture(level=40), (0, 0), 6), angles=(30.0, 0.0))
     assert pt.pick_tips(m) == ["turn", "blurry"]

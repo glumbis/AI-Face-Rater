@@ -547,6 +547,7 @@ class FaceRaterApp:
         self.tracker = hp.HeadTracker()  # steady head angles for the tip in the live preview
         self.recent = hp.RecentFrames()  # the last second of pictures, to rate the most frontal one
         self.lastFaceTime = 0.0  # when the live preview last saw a face
+        self.sizeProblem = None  # the distance tip showing in the live preview: None, "near" or "far"
         self.scoreActive = False  # True while a score is shown
         self.scoreColour = "text"  # the name of the colour of the score, it depends on how good the score is
         self.cameraHint = TIP_TEXT  # what the hint says in camera mode
@@ -865,16 +866,25 @@ class FaceRaterApp:
         if found is None:
             if now - self.lastFaceTime > FACE_LOST_GRACE:
                 self.tracker.reset()
+                self.sizeProblem = None
                 self.set_status("No face found. Face the camera!", WARN)
         else:
             self.lastFaceTime = now
             xList, yList, angles = found
             problem = None
+            # Too far away comes first: it is what to fix first. A picture with the face too small can't be rated,
+            # so it isn't kept for Take photo
+            size = ld.face_size(xList, yList, frame.shape)
+            self.sizeProblem = ld.size_problem(size, self.sizeProblem)
             if angles is not None:
                 # The tip follows the middle of the last few pictures, and Take photo can use any of the recent ones
                 problem = self.tracker.update(*angles, now)
-                self.recent.add(camera, *angles, now)
-            if problem is None:
+                if size >= ld.MIN_FACE_SIZE:
+                    self.recent.add(camera, *angles, now)
+            if self.sizeProblem is not None:
+                self.set_status(ld.SIZE_MESSAGES[self.sizeProblem], WARN)
+                color = (40, 160, 245)
+            elif problem is None:
                 self.set_status("Looking good! Press Take photo or Space.", GOOD)
                 color = (128, 222, 74)
             else:
@@ -905,7 +915,7 @@ class FaceRaterApp:
         self.tracker.reset()
         # Rate the picture the way the camera took it, like a photo picked from a file (the face is the
         # same way round as other people see it). It's only shown mirrored, like the preview
-        self.rate(frame, mirrored=True)
+        self.rate(frame, mirrored=True, source="camera")
 
     def primary_clicked(self):
         # The big button takes a photo, or after a result it goes back to the camera
@@ -949,7 +959,7 @@ class FaceRaterApp:
         self.root.update_idletasks()
 
         try:
-            result = ld.rate_face(picture, self.gender.get())
+            result = ld.rate_face(picture, self.gender.get(), source)
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
             self.set_hint("Try again, or pick another photo.")
@@ -975,7 +985,7 @@ class FaceRaterApp:
         if picture is not self.ratedPicture:
             self.ratedPicture = picture
             self.ratedInfo = {}
-            self.tips = self.photo_tips(picture)
+            self.tips = self.photo_tips(picture, source)
         self.set_hint("\n".join(self.fit_hint(([skinNote] if skinNote else []) + self.tips)))
         self.show_history(self.history_info(result))
         self.animate_score(result["score"])
@@ -1004,14 +1014,14 @@ class FaceRaterApp:
             kept.append(text)
         return kept
 
-    def photo_tips(self, picture):
+    def photo_tips(self, picture, source="camera"):
         # The tip texts for a picture. Never fails: with no face or any other trouble there are just no tips
         try:
             small = phototips.shrink(picture)
             found = ld.detect_face(small)
             if found is None:
                 return []
-            return phototips.tip_lines(phototips.measure(small, found.xList, found.yList, found.angles))
+            return phototips.tip_lines(phototips.measure(small, found.xList, found.yList, found.angles, source))
         except Exception:
             return []
 
