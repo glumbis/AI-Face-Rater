@@ -1,5 +1,10 @@
 // Face Rater: the page. Camera, file picking, states and the wiring of all modules (see FEATURES.md for the contract).
-import { scoring, headpose, facedata, tips, history, share } from './modules.js';
+import * as scoring from './scoring.js';
+import * as headpose from './headpose.js';
+import * as facedata from './facedata.js';
+import * as tips from './tips.js';
+import * as history from './history.js';
+import * as share from './share.js';
 import { createLandmarker, detect as detectSafe } from './landmarker.js';
 import * as overlay from './overlay.js';
 import { registerServiceWorker } from './config.js';
@@ -34,7 +39,7 @@ const SIZE_MESSAGES = {
   far: 'Move closer to the camera.',
 };
 // A webcam face smaller than this can't be rated, so such frames aren't kept for Take photo
-const { MIN_FACE_SIZE = 0.30 } = facedata.CONST ?? {};
+const { MIN_FACE_SIZE } = facedata.CONST;
 
 // ---------- Elements ----------
 const $ = (id) => document.getElementById(id);
@@ -83,16 +88,6 @@ const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage can be blocked */ } },
 };
-
-function isFaceError(e) {
-  return e && (e.name === 'FaceError' || e.constructor?.name === 'FaceError' || e.isFaceError === true);
-}
-
-function canvasOf(item) {
-  if (!item) return null;
-  if (item instanceof HTMLCanvasElement) return item;
-  return item.canvas ?? item.frame ?? item.image ?? null;
-}
 
 // ---------- Status, hint, message ----------
 function setStatus(text, kind = 'neutral') {
@@ -313,7 +308,7 @@ function showPicture(canvas, mirrored, points = null, cheeks = null) {
 function showError(e, id) {
   if (current?.id !== id) return;
   let message = 'Something went wrong while rating. Try another photo.';
-  if (isFaceError(e)) message = e.message;
+  if (e?.name === 'FaceError') message = e.message;
   else console.error(e);
   current.failed = true;
   cancelAnimationFrame(scoreAnimation);
@@ -563,7 +558,7 @@ function loop(now) {
 
 async function takePhoto() {
   if (S.mode !== 'camera' || S.cam !== 'live' || !S.image || el.video.readyState < 2) return;
-  const canvas = canvasOf(recent.best()) ?? captureFrame();
+  const canvas = recent.best() ?? captureFrame();
   recent.reset();
   headTracker.reset();
   // Rated the way the camera sent it, and only shown mirrored, like the preview
@@ -586,10 +581,15 @@ el.primary.addEventListener('click', primaryClicked);
 el.pick.addEventListener('click', pickPhoto);
 el.file.addEventListener('change', () => ratePhotoFile(el.file.files[0]));
 
-el.reference.addEventListener('change', (e) => {
+el.reference.addEventListener('change', async (e) => {
   S.reference = e.target.value;
   store.set('afr-reference', S.reference);
-  if (S.mode === 'result' && current?.det) renderResult();
+  if (S.mode !== 'result' || !current?.det) return;
+  // Rating again can take a moment on a slow phone, so say so first (like the desktop app)
+  const cur = current, reference = S.reference;
+  setStatus('Rating…', 'neutral');
+  await nextFrame();
+  if (current === cur && S.reference === reference) renderResult();
 });
 
 el.shareBtn.addEventListener('click', async () => {

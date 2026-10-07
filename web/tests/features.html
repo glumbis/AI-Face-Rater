@@ -255,8 +255,15 @@ await test('each reference has its own numbers; the streak counts all of them', 
   fresh();
   rate('boy', 6.0, { now: at(14) });
   rate('girl', 4.0, { now: at(15) });
-  eq([history.stats('boy', NOW).count, history.stats('girl', NOW).count, history.stats('average', NOW).count], [1, 1, 0]);
-  eq(history.stats('average', NOW).streak, 2);
+  eq([history.stats('boy', NOW).count, history.stats('girl', NOW).count], [1, 1]);
+  eq(history.stats('girl', NOW).streak, 2);
+});
+await test('rows for the removed "average" model face are skipped and cannot be added', () => {
+  const s = fresh();
+  s.setItem('afr.history.v1', JSON.stringify([{ t: at(14), r: 'average', s: 7, c: 0.8, y: 0.9, src: 'file' },
+    { t: at(15), r: 'boy', s: 6, c: 0.8, y: 0.9, src: 'file' }]));
+  eq([history.stats('boy', NOW).count, history.stats('average', NOW).count, history.entryCount()], [1, 0, 1]);
+  eq(rate('average', 5, { now: NOW }), false);
 });
 await test('same pictureId and reference is saved once; another reference is saved too', () => {
   fresh();
@@ -351,10 +358,10 @@ await test('storage that fills up while running keeps working in memory', () => 
 await test('default storage (real localStorage) does not throw', () => {
   history._setStorage(undefined);
   history.clearHistory();
-  rate('average', 5, { now: NOW });
-  eq(history.stats('average', NOW).count, 1);
+  rate('girl', 5, { now: NOW });
+  eq(history.stats('girl', NOW).count, 1);
   history.clearHistory();
-  eq(history.stats('average', NOW).count, 0);
+  eq(history.stats('girl', NOW).count, 0);
 });
 await test('series: the latest scores for one model face, oldest first', () => {
   fresh();
@@ -477,6 +484,19 @@ await test('sw.js parses, has the build placeholder and handles fetch', async ()
   new Function(text);
   ok(text.includes("const BUILD = '__BUILD__'"), 'build placeholder');
   ok(text.includes("addEventListener('fetch'") && text.includes("addEventListener('activate'"), 'listeners');
+});
+await test('every file sw.js keeps for offline use exists, and every script is in it', async () => {
+  const text = await (await fetch(new URL('sw.js', base))).text();
+  const shell = [...text.match(/const SHELL = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  for (const path of shell) ok((await fetch(new URL(path, base), { method: 'HEAD' })).ok, path);
+  const page = await (await fetch(new URL('index.html', base))).text();
+  const scripts = new Set(['js/app.js']);
+  for (const name of scripts) {
+    const source = await (await fetch(new URL(name, base))).text();
+    for (const [, dep] of source.matchAll(/from '\.\/([\w-]+\.js)'/g)) scripts.add('js/' + dep);
+  }
+  ok(page.includes('src="js/app.js"'), 'index.html loads js/app.js');
+  for (const name of scripts) ok(shell.includes(name), name + ' is in SHELL');
 });
 await test('config.js exports MP_VERSION and pinned jsDelivr URLs', async () => {
   const c = await import('../js/config.js');
