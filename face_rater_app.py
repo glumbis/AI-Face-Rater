@@ -12,7 +12,8 @@ except ImportError as e:
     # Started by double-clicking there's no terminal to show the error in, so show it in a window
     root = tk.Tk()
     root.withdraw()
-    messagebox.showerror("AI Face Rater", f"Missing Python package: {e.name}\n\n"
+    # e.name is None when the package was found but something inside it failed to import, then show the whole message
+    messagebox.showerror("AI Face Rater", f"Missing Python package: {e.name or e}\n\n"
                                           "Install the packages with:\npip install -r requirements.txt")
     sys.exit(1)
 
@@ -23,6 +24,10 @@ CAMERA_INDEX = 0
 PREVIEW_DETECT_WIDTH = 320
 # How often the live preview updates, in milliseconds
 PREVIEW_DELAY = 30
+# If the camera hasn't sent a new picture for this many seconds, it counts as disconnected
+CAMERA_LOST_AFTER = 1.0
+# Room (in pixels at 100% screen scaling) kept free below the picture for the buttons and score
+LAYOUT_RESERVE = 480
 
 GOOD = "#1a7f37"
 BAD = "#c62828"
@@ -31,12 +36,14 @@ NEUTRAL = "#555555"
 # The details under the score are three lines (skin clarity, symmetry, colour key), empty lines keep their space
 EMPTY_DETAILS = "\n\n"
 
+
 class Camera:
     # Reads frames from the camera in the background, so the window doesn't freeze while waiting for the next one
 
     def __init__(self, index):
         self.index = index
         self.frame = None
+        self.frameTime = 0.0  # when the latest frame arrived
         self.opened = None  # None while starting, then True or False
         self.running = True
         self.lock = threading.Lock()
@@ -66,9 +73,20 @@ class Camera:
             fails = 0
             with self.lock:
                 self.frame = frame
+                self.frameTime = time.monotonic()
         cap.release()
 
+    def lost(self):
+        # True when the camera worked but has stopped sending pictures (for example unplugged).
+        # Reading keeps failing for a few seconds before the loop above gives up, and until then the last
+        # picture would stay on the screen as if nothing was wrong
+        with self.lock:
+            return self.frame is not None and time.monotonic() - self.frameTime > CAMERA_LOST_AFTER
+
     def latest(self):
+        # The newest frame, or None if there isn't one yet or it's too old
+        if self.lost():
+            return None
         with self.lock:
             return None if self.frame is None else self.frame.copy()
 
@@ -86,11 +104,15 @@ class FaceRaterApp:
         self.camera = None
         self.mode = "camera"  # "camera" shows the live preview, "result" shows a rated picture
         self.currentPicture = None
+        self.currentMirrored = False
         self.animation = None
 
-        # Picture area fits the screen (leaving room for the buttons and score below it), 4:3 like most webcams
+        # Picture area fits the screen (leaving room for the buttons and score below it), 4:3 like most webcams.
+        # Text and buttons get bigger with Windows' screen scaling, so the room they need grows with it
+        # (tk scaling is pixels per point, which is 96/72 at 100%)
         screenH = self.root.winfo_screenheight()
-        self.viewH = max(300, min(720, int(screenH * 0.55), screenH - 480))
+        reserve = int(LAYOUT_RESERVE * float(self.root.tk.call("tk", "scaling")) / (96 / 72))
+        self.viewH = max(300, min(720, int(screenH * 0.55), screenH - reserve))
         self.viewW = self.viewH * 4 // 3
 
         style = ttk.Style()
@@ -106,7 +128,9 @@ class FaceRaterApp:
         viewFrame = tk.Frame(main, width=self.viewW, height=self.viewH, bg="#202020")
         viewFrame.pack(pady=(8, 6))
         viewFrame.pack_propagate(False)
-        self.view = tk.Label(viewFrame, bg="#202020", fg="white", font=("Segoe UI", 12))
+        # No border or padding, otherwise a few pixels of the picture are cut off at each side
+        self.view = tk.Label(viewFrame, bg="#202020", fg="white", font=("Segoe UI", 12),
+                             bd=0, padx=0, pady=0, highlightthickness=0)
         self.view.pack(fill="both", expand=True)
 
         self.status = tk.Label(main, text="", font=("Segoe UI", 13, "bold"), fg=NEUTRAL, wraplength=self.viewW)
@@ -116,20 +140,22 @@ class FaceRaterApp:
         genderRow.pack(pady=(0, 6))
         ttk.Label(genderRow, text="Compare with the model face of a:").pack(side="left", padx=(0, 8))
         self.gender = tk.StringVar(value="boy")
+        # takefocus=False on the buttons: a clicked button would otherwise get the keyboard focus, and then
+        # Space would press it again as well as taking a photo
         for text, value in (("Boy", "boy"), ("Girl", "girl")):
-            ttk.Radiobutton(genderRow, text=text, value=value, variable=self.gender,
+            ttk.Radiobutton(genderRow, text=text, value=value, variable=self.gender, takefocus=False,
                             command=self.gender_changed).pack(side="left", padx=4)
 
         buttons = ttk.Frame(main)
         buttons.pack(pady=(0, 6))
         self.takeButton = ttk.Button(buttons, text="Take photo  (Space)", style="Big.TButton",
-                                     command=self.take_photo, state="disabled")
+                                     command=self.take_photo, state="disabled", takefocus=False)
         self.takeButton.pack(side="left", padx=4)
         self.pickButton = ttk.Button(buttons, text="Pick a photo...", style="Big.TButton",
-                                     command=self.pick_photo, state="disabled")
+                                     command=self.pick_photo, state="disabled", takefocus=False)
         self.pickButton.pack(side="left", padx=4)
         self.backButton = ttk.Button(buttons, text="Back to camera  (Esc)", style="Big.TButton",
-                                     command=self.back_to_camera)
+                                     command=self.back_to_camera, takefocus=False)
 
         # Empty score and details still take up their space, so the window doesn't change size when a result shows up
         self.scoreLabel = ttk.Label(main, text=" ", style="Score.TLabel")
@@ -137,7 +163,7 @@ class FaceRaterApp:
         self.detailLabel = ttk.Label(main, text=EMPTY_DETAILS, foreground=NEUTRAL, justify="center")
         self.detailLabel.pack()
 
-        self.root.bind("<space>", lambda e: self.take_photo())
+        self.root.bind("<space>", self.space_pressed)
         self.root.bind("<Escape>", lambda e: self.back_to_camera())
         self.root.bind("<Control-o>", lambda e: self.pick_photo())
 
@@ -149,7 +175,8 @@ class FaceRaterApp:
     def start(self):
         try:
             ld.load_predictor()
-        except FileNotFoundError as e:
+        except (FileNotFoundError, RuntimeError) as e:
+            # RuntimeError is a damaged model file
             messagebox.showerror("AI Face Rater", str(e))
             self.root.destroy()
             return
@@ -172,6 +199,11 @@ class FaceRaterApp:
                 self.photo = None
                 self.takeButton.config(state="disabled")
                 self.set_status("", NEUTRAL)
+            elif self.camera.lost():
+                self.view.config(image="", text="Camera disconnected.\nPlug it back in, or use \"Pick a photo...\".")
+                self.photo = None
+                self.takeButton.config(state="disabled")
+                self.set_status("Camera disconnected.", BAD)
             else:
                 frame = self.camera.latest()
                 if frame is not None:
@@ -223,8 +255,9 @@ class FaceRaterApp:
         frame = self.camera.latest()
         if frame is None:
             return
-        # Rate the same mirrored picture you saw in the preview
-        self.rate(cv2.flip(frame, 1))
+        # Rate the picture the way the camera took it, like a photo picked from a file (the face is the
+        # same way round as other people see it). It's only shown mirrored, like the preview
+        self.rate(frame, mirrored=True)
 
     def pick_photo(self):
         if str(self.pickButton["state"]) == "disabled":
@@ -244,17 +277,19 @@ class FaceRaterApp:
     def gender_changed(self):
         # Rate the same picture again against the other model face
         if self.mode == "result" and self.currentPicture is not None:
-            self.rate(self.currentPicture)
+            self.rate(self.currentPicture, self.currentMirrored)
 
-    def rate(self, picture):
+    def rate(self, picture, mirrored=False):
+        # mirrored=True shows the picture (and the result) mirrored, but rates it as it is
         self.mode = "result"
         self.currentPicture = picture
+        self.currentMirrored = mirrored
         self.backButton.pack(side="left", padx=4)
         self.takeButton.config(state="disabled")
         self.stop_animation()
         self.scoreLabel.config(text=" ")
         self.detailLabel.config(text=EMPTY_DETAILS)
-        self.show_picture(picture)
+        self.show_picture(cv2.flip(picture, 1) if mirrored else picture)
         self.set_status("Rating...", NEUTRAL)
         self.root.update_idletasks()
 
@@ -265,12 +300,13 @@ class FaceRaterApp:
             self.detailLabel.config(text="Take a new photo, or pick another one." + EMPTY_DETAILS)
             return
 
-        self.show_picture(result["picture"])
+        self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
         self.set_status("Done!", GOOD)
 
         clarity = result["clarity"]
         if clarity is None:
-            skinText = "Could not see the cheeks (or they are covered by a beard), so skin clarity is not counted."
+            skinText = ("Could not judge the cheeks (hidden, covered by a beard or a black-and-white photo), "
+                        "so skin clarity is not counted.")
         else:
             skinText = f"Skin clarity on the cheeks: {round(clarity * 100)}%  (score x{result['skinFactor']:.2f})"
         symmetryText = f"Symmetry: {round(result['symmetry'] * 100)}%  (score x{result['symmetryFactor']:.2f})"
@@ -308,6 +344,11 @@ class FaceRaterApp:
 
     # ---------- Helpers ----------
 
+    def space_pressed(self, event):
+        self.take_photo()
+        # Stop here, so Space doesn't also do anything else
+        return "break"
+
     def set_status(self, text, color):
         if self.status.cget("text") != text:
             self.status.config(text=text, fg=color)
@@ -331,6 +372,14 @@ def main():
         except Exception:
             pass
     root = tk.Tk()
+
+    def show_error(excType, value, trace):
+        # Started with pythonw there's nowhere for errors to be printed, so show them instead of failing silently
+        import traceback
+        traceback.print_exception(excType, value, trace)
+        messagebox.showerror("AI Face Rater", f"Something went wrong:\n\n{excType.__name__}: {value}")
+
+    root.report_callback_exception = show_error
     FaceRaterApp(root)
     root.mainloop()
 

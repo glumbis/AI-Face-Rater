@@ -15,6 +15,8 @@ PREDICTOR_PATH = os.path.join(SCRIPT_DIR, "shape_predictor_68_face_landmarks.dat
 
 # Bigger pictures are shrunk to this many pixels on the longest side before rating, so big photos don't take ages
 MAX_PICTURE_SIZE = 1280
+# When no face is found in a picture smaller than this on its shortest side, it looks again for smaller faces
+UPSAMPLE_BELOW = 400
 
 
 class FaceError(Exception):
@@ -26,9 +28,25 @@ def read_image(path):
     # cv2.imread can't open paths with letters like æ, ø and å on Windows, so read the bytes ourselves
     if not os.path.isfile(path):
         raise FaceError(f"Could not find the picture '{path}'.")
-    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except OSError as e:
+        # For example a OneDrive file that isn't downloaded while offline, or a file another program has locked
+        raise FaceError(f"Could not read '{path}': {e.strerror or e}")
+    except cv2.error:
+        # Empty or broken files can make OpenCV fail instead of just returning None
+        img = None
     if img is None:
         raise FaceError(f"Could not open '{path}' as a picture.")
+    return img
+
+
+def to_bgr(img):
+    # Everything here expects normal colour pictures (3 channels, blue-green-red), so convert gray and see-through ones
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.shape[2] == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
     return img
 
 
@@ -45,17 +63,28 @@ def load_predictor():
             raise FileNotFoundError("Missing shape_predictor_68_face_landmarks.dat. Download it from "
                                     "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, "
                                     "unzip it, and put it next to the scripts.")
-        predictor = dlib.shape_predictor(PREDICTOR_PATH)
+        try:
+            predictor = dlib.shape_predictor(PREDICTOR_PATH)
+        except RuntimeError:
+            # dlib's own message ("Error deserializing a floating point number...") doesn't say what to do
+            raise RuntimeError("shape_predictor_68_face_landmarks.dat is damaged or only partly downloaded. "
+                               "Download it again from "
+                               "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, "
+                               "unzip it, and put it next to the scripts.")
     return predictor
 
 
 def landmark_detect(img, detectScale=1.0):
     # Returns the 68 landmarks of the biggest face as xList, yList, or None if there is no face.
     # detectScale < 1 looks for the face in a shrunk copy, which is faster (used for the live camera)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(to_bgr(img), cv2.COLOR_BGR2GRAY)
 
     small = gray if detectScale == 1.0 else cv2.resize(gray, None, fx=detectScale, fy=detectScale)
     faces = detector(small)
+    # The face finder misses faces smaller than about 80 pixels, so if a small picture has no face, look again in a
+    # copy twice as big. That takes about 3 times as long, so only do it when the quick search found nothing
+    if len(faces) == 0 and min(small.shape[:2]) < UPSAMPLE_BELOW:
+        faces = detector(small, 1)
 
     if len(faces) == 0:
         return None
@@ -102,9 +131,16 @@ def head_angles(xList, yList, imgShape):
     # Returns (turn, tilt) in degrees. turn is to the side, tilt is positive when looking down and negative when looking up
     h, w = imgShape[:2]
     points = np.array([(xList[p], yList[p]) for p in HEAD_MODEL_POINTS], dtype=np.float64)
-    # A normal webcam/phone camera: focal length about the picture width, middle of the picture straight ahead
-    camera = np.array([[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]], dtype=np.float64)
-    ok, rotation, _ = cv2.solvePnP(HEAD_MODEL, points, camera, None, flags=cv2.SOLVEPNP_ITERATIVE)
+    # A normal webcam/phone camera: focal length about the picture width. Pretending the camera looks straight at
+    # the nose tip means the answer doesn't change with where the face is in the picture (a face low in a photo
+    # would otherwise look tilted down, even if the photo was just cropped differently)
+    camera = np.array([[w, 0, xList[30]], [0, w, yList[30]], [0, 0, 1]], dtype=np.float64)
+    # Start from a head facing the camera a bit away. HEAD_MODEL has y up and the camera y down, so that's the
+    # head turned half a round around the x axis. Without this guess it sometimes lands on an upside-down answer
+    rotation = np.array([[np.pi], [0.0], [0.0]])
+    position = np.array([[0.0], [0.0], [3000.0]])
+    ok, rotation, _ = cv2.solvePnP(HEAD_MODEL, points, camera, None, rotation, position,
+                                   useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
     if not ok:
         return None
     # Which way the front of the face points, in the camera's directions (x right, y down, z away from the camera)
@@ -149,6 +185,10 @@ HAIR_MAX_COVER = 0.6
 CHEEK_SIZE = 0.2
 # Cheek squares are resized to this many pixels per side, so the check behaves the same for any photo size
 CHEEK_SAMPLE = 64
+# A cheek square with less than this share inside the picture isn't judged
+CHEEK_MIN_VISIBLE = 0.5
+# Skin with less colour than this (average Lab a* and b*, skin is usually 10 to 30) is a black-and-white photo
+MIN_SKIN_COLOUR = 2.0
 
 # The landmarks around each cheek, the middle of them is the middle of the square
 LEFT_CHEEK_POINTS = [1, 3, 31, 41]
@@ -164,17 +204,22 @@ def cheek_square(xList, yList, points):
 
 def cheek_inconsistencies(img, square):
     # Returns the share of the square's skin that is inconsistent, and a mask of where (in the square's own size).
-    # Returns None, None if the square is too small or mostly covered by beard
+    # Returns None, None if the square is too small, mostly outside the picture, grayscale or mostly covered by beard
     x1, y1, x2, y2 = square
+    # The square's real size, also when part of it is outside the picture
+    side = x2 - x1
     h, w = img.shape[:2]
     x1, y1, x2, y2 = max(x1, 0), max(y1, 0), min(x2, w), min(y2, h)
-    if x2 - x1 < 4 or y2 - y1 < 4:
+    if side < 4 or x2 - x1 < 4 or y2 - y1 < 4:
+        return None, None
+    # A thin strip at the edge of the picture is too little of the cheek to judge it
+    if (x2 - x1) * (y2 - y1) < CHEEK_MIN_VISIBLE * side * side:
         return None, None
 
     # Look at a bit more than the square, so the skin around the square's edges is known too
-    margin = (x2 - x1) // 4
+    margin = side // 4
     px1, py1, px2, py2 = max(x1 - margin, 0), max(y1 - margin, 0), min(x2 + margin, w), min(y2 + margin, h)
-    scale = CHEEK_SAMPLE / (x2 - x1)
+    scale = CHEEK_SAMPLE / side
     size = (round((px2 - px1) * scale), round((py2 - py1) * scale))
     patch = cv2.resize(img[py1:py2, px1:px2], size, interpolation=cv2.INTER_AREA)
     # Linear light, where a shadow multiplies all three colour channels by the same number
@@ -187,10 +232,16 @@ def cheek_inconsistencies(img, square):
     surroundings = cv2.GaussianBlur(linear, (0, 0), CHEEK_SAMPLE / 8)
     luminance = np.array([0.0722, 0.7152, 0.2126], np.float32)  # B, G, R
     detailLum = detail @ luminance
+    surroundingsLab = cv2.cvtColor(surroundings, cv2.COLOR_LBGR2Lab)
+
+    # Only the tint is compared, so a black-and-white photo would always look perfectly clear. Skin always has
+    # some colour (a* and b* in Lab), so if there's almost none, the photo has no colour to judge
+    if np.abs(surroundingsLab[..., 1:]).mean() < MIN_SKIN_COLOUR:
+        return None, None
 
     # Stubble and beard hairs are much darker than the skin around them, but not redder (a* in Lab is how red
     # a colour is). Redness and pimples are redder, so they still count. Hair isn't uneven skin, so leave it out
-    redness = cv2.cvtColor(detail, cv2.COLOR_LBGR2Lab)[..., 1] - cv2.cvtColor(surroundings, cv2.COLOR_LBGR2Lab)[..., 1]
+    redness = cv2.cvtColor(detail, cv2.COLOR_LBGR2Lab)[..., 1] - surroundingsLab[..., 1]
     hair = (detailLum < HAIR_DARKER * (surroundings @ luminance)) & (redness < HAIR_MAX_REDNESS)
 
     # Give each spot the same brightness as its surroundings, so a shadow (same skin, just darker) looks
@@ -198,7 +249,7 @@ def cheek_inconsistencies(img, square):
     relit = detail * ((surroundings @ luminance) / np.maximum(detailLum, 1e-4))[..., None]
 
     # Lab, so the distance between two colours is Delta E (how different they look to a person)
-    deltaE = np.linalg.norm(cv2.cvtColor(relit, cv2.COLOR_LBGR2Lab) - cv2.cvtColor(surroundings, cv2.COLOR_LBGR2Lab), axis=2)
+    deltaE = np.linalg.norm(cv2.cvtColor(relit, cv2.COLOR_LBGR2Lab) - surroundingsLab, axis=2)
     # In very dark shadow the colour is mostly camera noise, so don't judge it
     deltaE[detailLum < 0.01] = 0
 
@@ -332,6 +383,7 @@ def rate_face(img, gender):
     # Returns a dict with score (0 to 10), clarity (None if the cheeks couldn't be seen), skinFactor, symmetry,
     # symmetryFactor, shapeError and picture (a copy with the landmarks and cheek squares drawn on it).
     # Raises FaceError if it can't be rated.
+    img = to_bgr(img)
     h, w = img.shape[:2]
     if max(h, w) > MAX_PICTURE_SIZE:
         shrink = MAX_PICTURE_SIZE / max(h, w)
@@ -382,7 +434,7 @@ def main():
     try:
         load_predictor()
         selfiePic = read_image(imagePath)
-    except (FileNotFoundError, FaceError) as e:
+    except (FileNotFoundError, RuntimeError, FaceError) as e:
         sys.exit(str(e))
 
     gender = input("Are you a boy or a girl? (write boy or girl) Answer here --> ")
@@ -403,7 +455,8 @@ def main():
 
     print()
     if clarity is None:
-        print("Could not see the cheeks (or they are covered by a beard), so skin clarity is not counted.")
+        print("Could not judge the cheeks (hidden, covered by a beard or a black-and-white photo), "
+              "so skin clarity is not counted.")
     else:
         print(f"Skin clarity on the cheeks: {round(clarity * 100)}% (score x{round(result['skinFactor'], 2)})")
 
