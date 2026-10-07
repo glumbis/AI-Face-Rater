@@ -162,6 +162,14 @@ def test_picture_size_barely_changes_the_shape_error(boy_img, scale):
     assert abs(shape_error_of(resized, "girl") - shape_error_of(boy_img, "girl")) < SAME_FACE_TOLERANCE
 
 
+@pytest.mark.parametrize("picture, gender", [(BOY_PICTURE, "girl"), (GIRL_PICTURE, "boy")],
+                         ids=["perBoy-as-girl", "perGirl-as-boy"])
+def test_mirrored_picture_barely_changes_the_shape_error(picture, gender):
+    # A mirrored selfie (like the camera preview) is the same face, so it should get the same shape error
+    img = read_image(picture)
+    assert abs(shape_error_of(cv2.flip(img, 1), gender) - shape_error_of(img, gender)) < SAME_FACE_TOLERANCE
+
+
 def test_shape_error_of_the_model_face_itself_is_zero():
     perfectX, perfectY = getPerfs("boy")
     assert landmarkdetect.shape_error(perfectX, perfectY, "boy") == pytest.approx(0, abs=1e-9)
