@@ -8,16 +8,19 @@ import numpy as np
 # rest of the program only needs head_angles(), so a better way of measuring the angles can be swapped in there.
 
 # ---------- Limits ----------
-# How many degrees the head may be turned to the side, or tilted up or down. The angles from a single picture
-# jump around by several degrees even when the head doesn't move (the landmarks wobble a little), and a head
-# turned 10 degrees only costs about 2 points, so a picture is only refused when the head is clearly turned away
-MAX_TURN = 25
-MAX_TILT = 25
-# The live preview gives a gentle tip a bit earlier. It doesn't stop anything. The tip comes when the (smoothed) angle
+# How many degrees the head may be turned to the side, or tilted up or down. MediaPipe's head angles are steady (the
+# angle of a head that doesn't move wobbles by only about 0.15 degrees, and the two model faces read 0 to 5 degrees),
+# so a picture can be refused for a head that is only a little off. A head turned 10 degrees already costs about 2
+# points, so 12 degrees of turn is the limit. Tilt is allowed a bit more, because people looking at the screen
+# under the camera tilt down a little (and the face doesn't look as lopsided when it tilts as when it turns)
+MAX_TURN = 12
+MAX_TILT = 15
+# The live preview gives a gentle tip earlier. It doesn't stop anything. The tip comes when the (smoothed) angle
 # is over HINT_TURN / HINT_TILT, and goes away again when it's HINT_MARGIN degrees back under, so it doesn't flicker
-HINT_TURN = 15
-HINT_TILT = 15
-HINT_MARGIN = 4
+# (the margin is wider than the smoothed angles wobble, but small enough to be easy to hit when you straighten up)
+HINT_TURN = 8
+HINT_TILT = 10
+HINT_MARGIN = 2
 
 # The tip in the live preview, and the message when a picture is refused, for each way of facing
 HINT_MESSAGES = {

@@ -194,7 +194,8 @@ def test_detect_face_gives_landmarks_and_head_direction(boy_img):
     found = detect_face(boy_img)
     assert len(found.xList) == len(found.yList) == 162
     turn, tilt = found.angles
-    assert abs(turn) < 5 and abs(tilt) < 10
+    # (a frontal face must sit well inside the preview tip's limits, HINT_TURN and HINT_TILT)
+    assert abs(turn) < 3 and abs(tilt) < 7
 
 
 def test_landmarks_are_in_the_pixels_of_the_picture_whatever_the_size_searched(boy_img):
@@ -491,3 +492,60 @@ def test_huge_picture_still_rates(girl_img):
     huge = cv2.resize(girl_img, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_CUBIC)
     result = rate_face(huge, "girl")
     assert np.isfinite(result["score"])
+
+
+# ---------- Distance to the camera ----------
+
+def on_frame(img, share, frame=(720, 1280)):
+    # The picture shrunk so the face is `share` of the frame height, on a gray frame the size of a webcam picture
+    h, w = frame
+    found = detect_face(img)
+    top, chin = landmarkdetect.FACE_HEIGHT_POINTS
+    scale = share * min(h, w) / (found.yList[chin] - found.yList[top])
+    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    canvas = np.full((h, w, 3), 120, np.uint8)
+    sh, sw = small.shape[:2]
+    y0, x0 = (h - sh) // 2, (w - sw) // 2
+    canvas[max(y0, 0):y0 + sh, max(x0, 0):x0 + sw] = small[max(-y0, 0):max(-y0, 0) + h, max(-x0, 0):max(-x0, 0) + w]
+    return canvas
+
+
+def test_face_size_is_the_face_height_share_of_the_shorter_side(boy_img):
+    found = detect_face(boy_img)
+    h, w = boy_img.shape[:2]
+    size = landmarkdetect.face_size(found.xList, found.yList, boy_img.shape)
+    assert size == pytest.approx(0.529 * h / min(h, w), abs=0.02)
+    # the same face in a bigger picture is a smaller share
+    assert landmarkdetect.face_size(found.xList, found.yList, (h * 2, w * 2, 3)) == pytest.approx(size / 2)
+
+
+def test_the_distance_limits_are_ordered_as_intended():
+    assert landmarkdetect.MIN_FACE_SIZE_FILE < landmarkdetect.MIN_FACE_SIZE < landmarkdetect.HINT_FACE_SIZE
+
+
+def test_a_face_that_is_too_far_from_the_camera_is_refused(boy_img):
+    for share in (0.2, 0.26):
+        with pytest.raises(FaceError, match="Move closer to the camera."):
+            rate_face(on_frame(boy_img, share), "boy", "camera")
+
+
+def test_a_face_close_enough_to_the_camera_is_rated(boy_img, girl_img):
+    for img, gender in ((boy_img, "boy"), (girl_img, "girl")):
+        assert rate_face(on_frame(img, 0.34), gender, "camera")["score"] > 5
+    assert rate_face(boy_img, "boy", "camera")["score"] > 9
+
+
+def test_a_picked_photo_may_have_a_smaller_face_but_not_a_tiny_one(boy_img):
+    # A face a fifth of the picture's height is a normal portrait photo, but too far away for the webcam
+    assert rate_face(on_frame(boy_img, 0.2), "boy", "file")["score"] > 5
+    with pytest.raises(FaceError, match="too small"):
+        rate_face(on_frame(boy_img, 0.1, frame=(1280, 1280)), "boy", "file")
+
+
+def test_distance_tip_has_hysteresis():
+    size_problem = landmarkdetect.size_problem
+    assert size_problem(0.25) == "far" and size_problem(0.32) == "near" and size_problem(0.4) is None
+    # Once showing, a tip stays until the face is a margin past the limit
+    assert size_problem(0.31, "far") == "far" and size_problem(0.33, "far") == "near"
+    assert size_problem(0.36, "near") == "near" and size_problem(0.38, "near") is None
+    assert size_problem(0.36) is None
