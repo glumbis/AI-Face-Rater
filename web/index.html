@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Face Rater</title>
+  <meta name="description" content="Compare your face with the model face and get a score. Everything happens on your device.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#202020" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main class="app" id="app" data-mode="camera">
+
+    <section class="card hero" aria-label="Camera">
+      <div class="stage" id="stage" data-view="none">
+        <video id="video" class="layer live" playsinline muted autoplay></video>
+        <canvas id="overlay" class="layer live" aria-hidden="true"></canvas>
+        <canvas id="picture" class="layer result" role="img" aria-label="The rated picture with the face outline drawn on it"></canvas>
+        <div class="message" id="message" hidden>
+          <div class="message-body">
+            <p class="message-title" id="messageTitle"></p>
+            <p class="message-text" id="messageText"></p>
+            <div class="progress" id="progress" hidden><i id="progressBar"></i></div>
+            <button type="button" class="btn small" id="messageAction" hidden></button>
+          </div>
+        </div>
+        <div class="drop" id="drop" hidden><span>Drop a photo to rate it</span></div>
+      </div>
+      <div class="statusbar">
+        <div class="pill" id="status" data-kind="neutral" role="status" aria-live="polite" hidden>
+          <i class="dot" aria-hidden="true"></i><span id="statusText"></span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="Rating">
+      <header class="head">
+        <h1>Face Rater</h1>
+        <button type="button" class="icon-btn" id="aboutBtn" aria-label="About" aria-haspopup="dialog">i</button>
+      </header>
+      <p class="caption">Compare with the model face</p>
+      <div class="seg" role="radiogroup" aria-label="Model face" id="reference">
+        <label><input type="radio" name="reference" value="boy" checked><span>Boy</span></label>
+        <label><input type="radio" name="reference" value="girl"><span>Girl</span></label>
+        <label><input type="radio" name="reference" value="average"><span>Average</span></label>
+      </div>
+
+      <div class="scoreblock">
+        <div class="caption row"><span>Beauty score</span><span id="streak"></span></div>
+        <div class="score" id="score" data-band="none" aria-live="polite">
+          <span class="num" id="scoreNum">&ndash;</span><span class="unit" id="scoreUnit" hidden>/ 10</span>
+          <span class="trend" id="trend" hidden></span>
+        </div>
+        <p class="history" id="historyLine"></p>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="row"><span>Skin clarity</span><b id="clarityVal">&ndash;</b></div>
+          <div class="bar" aria-hidden="true"><i id="clarityBar"></i></div>
+        </div>
+        <div class="stat">
+          <div class="row"><span>Symmetry</span><b id="symmetryVal">&ndash;</b></div>
+          <div class="bar" aria-hidden="true"><i id="symmetryBar"></i></div>
+        </div>
+        <ul class="legend" id="legend" aria-label="Legend">
+          <li><i class="swatch mint" aria-hidden="true"></i>Landmarks</li>
+          <li><i class="swatch red" aria-hidden="true"></i>Uneven skin</li>
+        </ul>
+      </div>
+
+      <div class="bottom">
+        <div class="hint" id="hint" aria-live="polite"></div>
+        <button type="button" class="btn primary" id="primaryBtn" disabled>Take photo</button>
+        <div class="btn-row" id="secondaryRow">
+          <button type="button" class="btn" id="pickBtn" disabled>Pick a photo&hellip;</button>
+          <button type="button" class="btn" id="shareBtn" hidden>Share</button>
+        </div>
+        <p class="shortcuts" id="shortcuts">Space takes a photo &nbsp;·&nbsp; Esc goes back &nbsp;·&nbsp; Ctrl+O picks a photo</p>
+      </div>
+    </aside>
+  </main>
+
+  <input type="file" id="file" accept="image/*" hidden>
+
+  <dialog id="about" aria-labelledby="aboutTitle">
+    <form method="dialog" class="about-body">
+      <h2 id="aboutTitle">About</h2>
+      <p>Photos are processed on this device and never uploaded.</p>
+      <p class="about-note" id="clearNote" role="status" aria-live="polite"></p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="clearBtn">Clear history</button>
+        <button class="btn primary" value="close" autofocus>Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <noscript><p class="fallback">Face Rater needs JavaScript.</p></noscript>
+  <script nomodule>document.body.insertAdjacentHTML('afterbegin', '<p class="fallback">This browser is too old for Face Rater. Try a recent Chrome, Edge, Safari or Firefox.</p>');</script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
