@@ -22,12 +22,12 @@ A static website that does the same as the desktop app, entirely in the browser.
    - A ▲/▼ arrow against your average.
    - The day streak.
    - Clear history.
-8. **About ("i") panel** with one line, "Photos are processed on this device and never uploaded.", plus Clear history.
+8. **About ("i") panel** with a short "How it works" paragraph (landmarks compared with the model faces, a fun comparison and not a real measure of beauty) and "Photos are processed on this device and never uploaded.", plus Clear history. Before the first photo, a caption under the score says what to do and that nothing leaves the device.
 9. **Share card.** A PNG with the score, the stats and the reference, and **no photo**. Use the Web Share API, falling back to a download.
 10. **Look and feel**
     - Follows the system light/dark setting.
     - Modern and clean, matching the desktop design: one accent colour, rounded cards, Segoe UI Variable / system-ui.
-    - Responsive: a desktop two-column layout and a phone portrait layout. Usable from the keyboard, with visible focus rings.
+    - Responsive: a desktop two-column layout and a phone portrait layout. On a phone the button bar sticks to the bottom of the screen and a new result scrolls the score into view. Usable from the keyboard, with visible focus rings; the animated score is not a live region, the final score is announced once, and the result picture's label includes the score.
 11. **Robust states**
     - Loading the model (with progress).
     - Camera permission denied or no camera (the file picker still works).

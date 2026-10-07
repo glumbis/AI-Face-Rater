@@ -20,6 +20,8 @@ const MAX_HINT_LINES = 3;
 
 const TIP_TEXT = 'Look straight at the camera.';
 const NO_CAMERA_TEXT = 'Pick a photo to get started.';
+const INTRO_TEXT = 'Take a photo to see how closely your face matches the model face. Nothing leaves your device.';
+const PICTURE_LABEL = 'The rated picture with the face outline drawn on it';
 const NO_FACE_TEXT = 'No face found. Face the camera!';
 const HINT_MESSAGES = {
   side: 'Turn a little towards the camera.',
@@ -41,7 +43,7 @@ const el = {
   message: $('message'), messageTitle: $('messageTitle'), messageText: $('messageText'),
   progress: $('progress'), progressBar: $('progressBar'), messageAction: $('messageAction'), drop: $('drop'),
   status: $('status'), statusText: $('statusText'),
-  score: $('score'), scoreNum: $('scoreNum'), scoreUnit: $('scoreUnit'), trend: $('trend'),
+  score: $('score'), scoreLive: $('scoreLive'), scoreNum: $('scoreNum'), scoreUnit: $('scoreUnit'), trend: $('trend'),
   streak: $('streak'), historyLine: $('historyLine'),
   clarityVal: $('clarityVal'), clarityBar: $('clarityBar'), symmetryVal: $('symmetryVal'), symmetryBar: $('symmetryBar'),
   legend: $('legend'), hint: $('hint'), primary: $('primaryBtn'), pick: $('pickBtn'), shareBtn: $('shareBtn'),
@@ -51,6 +53,7 @@ const el = {
 const overlayCtx = el.overlay.getContext('2d');
 const pictureCtx = el.picture.getContext('2d');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const narrow = matchMedia('(max-width: 800px)');
 
 // ---------- State ----------
 const S = {
@@ -160,6 +163,7 @@ function refreshCameraUI() {
   el.primary.textContent = 'Take photo';
   el.pick.disabled = !(S.supported && S.modelState === 'ready');
   el.shareBtn.hidden = true;
+  el.historyLine.textContent = live ? INTRO_TEXT : '';
   if (!live) {
     setStatus('');
     setHint(S.supported && (S.cam === 'denied' || S.cam === 'none' || S.cam === 'insecure' || S.cam === 'lost' || S.cam === 'error') ? NO_CAMERA_TEXT : '');
@@ -189,12 +193,17 @@ function resetResultPanel() {
   el.legend.classList.remove('on');
   el.shareBtn.hidden = true;
   el.shareBtn.disabled = false;
+  el.scoreLive.textContent = '';
+  el.picture.setAttribute('aria-label', PICTURE_LABEL);
 }
 
 function animateScore(score) {
   const band = score >= 8 ? 'high' : score < 4 ? 'low' : 'mid';
   el.score.dataset.band = band;
   el.scoreUnit.hidden = false;
+  // The number animates silently; screen readers get the final score once
+  el.scoreLive.textContent = `Score ${fmt(score)} out of 10`;
+  el.picture.setAttribute('aria-label', `${PICTURE_LABEL}. Score ${fmt(score)} out of 10.`);
   cancelAnimationFrame(scoreAnimation);
   clearTimeout(scoreTimer);
   if (reducedMotion.matches) { el.scoreNum.textContent = fmt(score); return; }
@@ -277,6 +286,8 @@ function showError(e, id) {
   el.scoreNum.textContent = '–';
   el.scoreUnit.hidden = true;
   el.score.dataset.band = 'none';
+  el.scoreLive.textContent = '';
+  el.picture.setAttribute('aria-label', PICTURE_LABEL);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
 }
@@ -345,6 +356,8 @@ function renderResult() {
   showHistory(stats);
   animateScore(result.score);
   el.shareBtn.hidden = false;
+  // On a phone the score is below the picture, so bring it into view
+  if (narrow.matches) el.score.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
 }
 
 // ---------- Pictures from files, drops and pastes ----------
