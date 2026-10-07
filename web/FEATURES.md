@@ -38,6 +38,19 @@ A static website that does the same as the desktop app, entirely in the browser.
     - Unsupported browser.
 12. **Installable PWA that works offline after the first visit.** The service worker caches the app, the model and the MediaPipe files.
 
+13. **Optional leaderboard and community average** (website only, hidden until set up). With a Supabase URL and key in `js/config.js`:
+    - Under a result: "Better than 63% of 120 players · Average 5.8" (from `community_stats`; hidden when offline or with no players) and a small **Add to leaderboard** button. It opens a dialog with a nickname (2 to 20 characters; use a nickname, not your real name; a small blocklist) and an **unticked** consent box (13 or older, publish nickname and score, include the score and region scores in the average; no photo; delete any time under About). Submit stays disabled until it is ticked and the nickname is valid. Submitting again replaces your entry for that model face.
+    - A **Leaderboard** button (bar-chart icon) next to the "i" button shows the top 20 for Boy or Girl, starting on the selected model face.
+    - **About** has the privacy line and **Delete my leaderboard entries** (with a confirmation).
+    - Only the nickname, the score (1 decimal) and the five region scores are sent, never a photo or landmarks. Each browser has a random 64-character token in localStorage; the database stores only its SHA-256, which is how "your" entries are found for deleting. Calls are plain `fetch` to `<url>/rest/v1/rpc/<function>` (`js/leaderboard.js`), never cached by the service worker.
+    - The weekly `.github/workflows/keepalive.yml` calls `top_scores` so a free Supabase project doesn't pause for being idle. It skips when `config.js` has no URL and key.
+
+### Leaderboard setup
+
+1. Create a Supabase project (free) in an EU region.
+2. Open **SQL Editor**, paste `supabase/setup.sql` and run it (running it again is safe).
+3. Under **Project Settings > API** copy the Project URL and the anon / publishable key (it is meant to be public) into `SUPABASE_URL` and `SUPABASE_KEY` in `web/js/config.js`, and push. Until both are filled in, none of the leaderboard shows.
+
 Later (not v1): daily photo-quality challenges, and friend groups.
 
 ## Tech
@@ -58,6 +71,7 @@ Later (not v1): daily photo-quality challenges, and friend groups.
 | `js/tips.js` | features agent | `photoTips(imageData, points478px, angles, source)` → `string[]` (at most 2, or the single "great setup" line) |
 | `js/history.js` | features agent | `addRating({reference, score, clarity, symmetry, source})`, `stats(reference)` → `{best, average, count, trend, diff, streak}` (`trend` is `"up"`, `"down"` or `null` and `diff` is the score minus the previous photo's, both from the scores rounded to one decimal as shown), `series(reference, n = 12)` → the latest `n` scores for that model face, oldest first (`[]` if none), `clearHistory()` |
 | `js/share.js` | features agent | `makeShareCard({score, clarity, symmetry, reference, stats, theme})` → `Promise<Blob>`, `shareOrDownload(blob)` |
+| `js/leaderboard.js` | features agent | `enabled`, `nameProblem(name)` → `null \| string`, `submitScore({name, score, reference, regions})`, `topScores(reference)` → `[{name, score}]`, `communityStats(reference, score)` → `{players, average, below} \| null`, `deleteMyEntries()` → count; settings `SUPABASE_URL`, `SUPABASE_KEY`, `LEADERBOARD_MIN_AGE`, `CONSENT_VERSION` in `js/config.js` |
 | `sw.js`, `manifest.webmanifest`, icons | features agent | offline caching and install |
 | `index.html`, `css/app.css`, `js/app.js`, `js/landmarker.js`, `js/overlay.js` | UI agent | the page, MediaPipe setup (`createLandmarker(mode)`, `detect(source, ts)` → `{points478px: [[x, y, depth] * 478], matrix}` for the largest face, or `null`), camera, states, drawing, wiring of all modules |
 | `tools/`, `tests/` (`web/tests/index.html` runs `golden.json` against `scoring.js` and `headpose.js` in the browser) | scoring agent | |

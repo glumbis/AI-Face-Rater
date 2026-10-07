@@ -23,6 +23,16 @@ Rates a face by comparing its landmarks (MediaPipe Face Landmarker) with a few m
   - It always starts at the first picture in the folder that isn't rated yet, and shows how many are done ("12 / 340").
   - `ratings.csv` has a `filename,rating` header and can be edited in Excel (comma- or semicolon-separated). If it has a line the tool can't read, it tells you which line and doesn't start, so no rating is lost.
 
+## Leaderboard setup (website, optional)
+
+The website can show a leaderboard and a community average, kept in a free Supabase database. Only a nickname, a score and the region scores are stored, only for people who opt in, and never a photo. It stays hidden until you set it up:
+
+1. Create a Supabase project in an EU region.
+2. In the **SQL Editor** run `supabase/setup.sql` (safe to run again).
+3. Paste the Project URL and the anon / publishable key (it is public by design) into `SUPABASE_URL` and `SUPABASE_KEY` in `web/js/config.js`.
+
+A weekly workflow (`.github/workflows/keepalive.yml`) keeps the free project from pausing. More in `web/FEATURES.md`.
+
 ## How the score works
 
 The 162 face landmarks (picked from the 478 that MediaPipe finds) are lined up with a model face by moving, turning and resizing them to fit as closely as possible. The face is also compared the other way round (mirrored), so a mirrored selfie gets the same score. Each region counts differently: eyes and nose the most, brows a medium amount, the jaw line and outer lips a little, and the inner lips not at all, since they mostly change with expression. The face is compared with every model face of the chosen gender, and the closest one counts.

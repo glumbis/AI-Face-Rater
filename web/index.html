@@ -41,7 +41,12 @@
     <aside class="panel" aria-label="Rating">
       <header class="head">
         <h1>Face Rater</h1>
-        <button type="button" class="icon-btn" id="aboutBtn" aria-label="About" aria-haspopup="dialog">i</button>
+        <div class="head-btns">
+          <button type="button" class="icon-btn" id="boardBtn" aria-label="Leaderboard" title="Leaderboard" aria-haspopup="dialog" hidden>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 13.5V8h3v5.5 M6.5 13.5v-11h3v11 M10.5 13.5V5.5h3v8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="aboutBtn" aria-label="About" aria-haspopup="dialog">i</button>
+        </div>
       </header>
       <p class="caption">Compare with the model face</p>
       <div class="seg" role="radiogroup" aria-label="Model face" id="reference">
@@ -60,6 +65,10 @@
         <div class="histmeta" id="histMeta" hidden>
           <span class="pb" id="pbBadge" hidden>New personal best!</span>
           <svg class="spark" id="spark" viewBox="0 0 96 24" role="img" hidden><polyline points=""/><circle r="2.5"/></svg>
+        </div>
+        <div class="community" id="community" hidden>
+          <p id="communityLine" hidden></p>
+          <button type="button" class="btn small" id="addBoardBtn" aria-haspopup="dialog">Add to leaderboard</button>
         </div>
       </div>
 
@@ -125,12 +134,48 @@
       <h2 id="aboutTitle">About</h2>
       <p><strong>How it works.</strong> Face Rater finds landmark points on your face, turns your head back to face the camera and compares the layout with the model faces. The closest one counts, and each part of the face gets its own score too. It is a fun comparison, not a real measure of beauty.</p>
       <p>Photos are processed on this device and never uploaded.</p>
+      <p id="boardPrivacy" hidden>The leaderboard is optional. If you opt in, your nickname, score and region scores are stored with Supabase (EU). Nothing else, and never a photo.</p>
       <p class="about-note" id="clearNote" role="status" aria-live="polite"></p>
       <div class="btn-row">
         <button type="button" class="btn" id="clearBtn">Clear history</button>
         <button class="btn primary" value="close" autofocus>Done</button>
       </div>
+      <button type="button" class="btn small" id="deleteBoardBtn" hidden>Delete my leaderboard entries</button>
     </form>
+  </dialog>
+
+  <dialog id="addBoard" aria-labelledby="addBoardTitle">
+    <form class="about-body" id="addBoardForm">
+      <h2 id="addBoardTitle">Add to leaderboard</h2>
+      <label class="field">
+        <span>Nickname</span>
+        <input type="text" id="nickname" maxlength="20" autocomplete="off" spellcheck="false" aria-describedby="nickHint">
+        <small id="nickHint">Use a nickname, not your real name. 2 to 20 letters, numbers, spaces, . _ or -</small>
+      </label>
+      <label class="consent">
+        <input type="checkbox" id="consent">
+        <span>I am <span class="minAge">13</span> or older and agree to publish my nickname and score on the public leaderboard and include my score and region scores in the community average. No photo is shared. I can delete my entry any time under About.</span>
+      </label>
+      <p class="about-note" id="addBoardInfo"></p>
+      <p class="about-note" id="addBoardNote" role="status" aria-live="polite"></p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="addBoardCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="addBoardSubmit" disabled>Submit</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="board" aria-labelledby="boardTitle">
+    <div class="about-body">
+      <h2 id="boardTitle">Leaderboard</h2>
+      <div class="seg" role="radiogroup" aria-label="Model face" id="boardRef">
+        <label><input type="radio" name="boardRef" value="boy" checked><span>Boy</span></label>
+        <label><input type="radio" name="boardRef" value="girl"><span>Girl</span></label>
+      </div>
+      <p class="about-note" id="boardNote" role="status" aria-live="polite"></p>
+      <ol class="top" id="boardList" aria-label="Top 20"></ol>
+      <button type="button" class="btn primary" id="boardDone">Done</button>
+    </div>
   </dialog>
 
   <noscript><p class="fallback">Face Rater needs JavaScript.</p></noscript>

@@ -228,6 +228,7 @@ button { font: inherit; color: inherit; }
 /* ---------- Panel ---------- */
 
 .head { display: flex; align-items: center; justify-content: space-between; }
+.head-btns { display: flex; gap: 8px; }
 h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
 
 .icon-btn {
@@ -302,6 +303,11 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
 .spark { width: 96px; height: 24px; margin-left: auto; overflow: visible; }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 .spark circle { fill: var(--accent); }
+
+/* How the score compares with the other players, and the button to join them (only with a leaderboard set up) */
+.community { display: grid; justify-items: start; gap: 8px; margin-top: 8px; }
+.community p { color: var(--muted); font-size: 12.5px; }
+.community .btn.small { min-height: 32px; padding: 0 12px; font-size: 13px; }
 
 /* Stats */
 .stats { margin-top: 18px; display: grid; gap: 16px; }
@@ -384,6 +390,27 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 .about-body { display: grid; gap: 14px; padding: 22px; }
 .about-body h2 { font: 600 20px/1.2 var(--font-display); }
 .about-note { min-height: 1.2em; color: var(--muted); font-size: 13px; }
+
+/* Leaderboard dialogs */
+.field { display: grid; gap: 6px; font-weight: 500; }
+.field small { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+.field input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--button-edge);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.consent { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; color: var(--muted); font-size: 13px; cursor: pointer; }
+.consent input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
+.top { margin: 0; padding: 0; list-style: none; max-height: 52vh; overflow-y: auto; }
+.top li { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--card-edge); font-size: 14px; }
+.top li:last-child { border-bottom: 0; }
+.top .rank { color: var(--muted); font-variant-numeric: tabular-nums; }
+.top .nick { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .fallback { padding: 24px; text-align: center; }
 

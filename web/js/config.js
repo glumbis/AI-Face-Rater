@@ -13,6 +13,16 @@ export const MODEL_URL = new URL('../face_landmarker.task', import.meta.url).hre
 // What the service worker is asked to keep for offline use (the SIMD build of the WASM, which every current browser uses)
 export const MP_PRECACHE_URLS = [MP_BUNDLE_URL, `${MP_WASM_URL}/vision_wasm_internal.js`, `${MP_WASM_URL}/vision_wasm_internal.wasm`];
 
+// The optional leaderboard (Supabase, see "Leaderboard setup" in the README). Paste the Project URL and the public
+// anon / publishable key here; while either is empty the whole feature is hidden. The key is meant to be public.
+// (.github/workflows/keepalive.yml reads these two lines with sed, so keep them as they are.)
+export const SUPABASE_URL = '';
+export const SUPABASE_KEY = '';
+// The age and the wording version of the consent text on the "Add to leaderboard" dialog. Raise CONSENT_VERSION
+// when that text changes in a way that matters; it is stored with each entry.
+export const LEADERBOARD_MIN_AGE = 13;
+export const CONSENT_VERSION = 1;
+
 // Registers the service worker (offline use + install). Safe to call anywhere: it does nothing without service worker
 // support or a secure context (https or localhost), and never throws. Call it once, after the page has loaded.
 export function registerServiceWorker() {
