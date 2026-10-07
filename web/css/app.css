@@ -412,6 +412,17 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
   .hint { min-height: 3.2em; }
 }
 
+/* ---------- Short laptop screens (e.g. 1366x768) ---------- */
+
+@media (min-width: 801px) and (max-height: 820px) {
+  .app { padding-top: 16px; padding-bottom: 0; }
+  .scoreblock { margin-top: 16px; }
+  .stats { margin-top: 12px; gap: 12px; }
+  .hint { min-height: 3.2em; }
+  /* The buttons stay in reach at the bottom of the window when the panel is taller than it */
+  .bottom { position: sticky; bottom: 0; z-index: 1; padding: 12px 0 16px; background: var(--bg); }
+}
+
 @media (hover: none) { .shortcuts { display: none; } }
 
 @media (prefers-reduced-motion: reduce) {
