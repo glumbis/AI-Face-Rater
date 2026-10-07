@@ -3,13 +3,16 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkFont
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 try:
     import cv2
     from PIL import Image, ImageColor, ImageDraw, ImageTk
     import headpose as hp
+    import history
     import landmarkdetect as ld
+    import phototips
 except ImportError as e:
     # Started by double-clicking there's no terminal to show the error in, so show it in a window
     root = tk.Tk()
@@ -79,7 +82,7 @@ EMPTY_SCORE = "\u2013"
 TIP_TEXT = "Look straight at the camera."
 NO_CAMERA_TEXT = "Pick a photo to get started."
 # The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
-HINT_LINES = 2
+HINT_LINES = 3
 # The colours of the landmark dots and uneven spots drawn on the rated picture (the same as in landmarkdetect.py)
 LEGEND_MINT = "#4ade80"
 LEGEND_RED = "#f87171"
@@ -88,6 +91,9 @@ LOADING_DOTS_DELAY = 400
 
 # How much bigger shapes are drawn before shrinking them again, which makes their edges smooth
 SMOOTHING = 4
+# The streak ("Day streak: 3") only shows from this many days in a row
+STREAK_SHOWN_FROM = 2
+ABOUT_TEXT = "Photos are processed on this computer and never uploaded."
 
 
 class Camera:
@@ -417,6 +423,113 @@ class Legend(tk.Canvas):
             x += font.measure(text) + self.app.px(16)
 
 
+class AboutDialog(tk.Toplevel):
+    # A small window over the app with the privacy line and the "Clear history" action (with a confirmation step)
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.themed = []
+        self.title("About")
+        self.resizable(False, False)
+        self.transient(app.root)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.bind("<Escape>", lambda e: self.close())
+        px = app.px
+        body = self.themed_widget(tk.Frame(self), bg="bg")
+        body.pack(padx=px(28), pady=px(24))
+        self.themed_widget(self, bg="bg")
+
+        self.label(body, "About", "title", anchor="w").pack(anchor="w")
+        self.label(body, ABOUT_TEXT, "body", "text", anchor="w", justify="left", wraplength=px(320)).pack(
+            anchor="w", pady=(px(14), px(6)))
+        # Says what happened to the history, and asks the question while confirming. Always one line, so nothing moves
+        self.note = self.label(body, "", "small", "muted", anchor="w", justify="left", wraplength=px(320))
+        self.note.pack(anchor="w", pady=(0, px(18)))
+
+        row = self.themed_widget(tk.Frame(body), bg="bg")
+        row.pack(anchor="w")
+        self.leftButton = RoundButton(row, app, "Clear history", self.ask_to_clear, False, px(155), px(44))
+        self.leftButton.pack(side="left")
+        self.rightButton = RoundButton(row, app, "Close", self.close, True, px(155), px(44))
+        self.rightButton.pack(side="left", padx=(px(10), 0))
+        self.confirming = False
+        self.refresh()
+        self.restyle()
+
+        # In the middle of the app window
+        self.update_idletasks()
+        root = app.root
+        x = root.winfo_rootx() + (root.winfo_width() - self.winfo_reqwidth()) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - self.winfo_reqheight()) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        app.style_title_bar(self)
+        self.after(20, self.take_focus)
+
+    def themed_widget(self, widget, **options):
+        self.themed.append((widget, options))
+        return widget
+
+    def label(self, parent, text, font, colour="text", **options):
+        label = tk.Label(parent, text=text, font=self.app.fonts[font], bd=0, padx=0, pady=0, takefocus=0, **options)
+        return self.themed_widget(label, bg="bg", fg=colour)
+
+    def take_focus(self):
+        # Makes the app behind it wait until this is closed
+        try:
+            self.grab_set()
+            self.focus_set()
+        except tk.TclError:
+            pass
+
+    def restyle(self):
+        c = self.app.colors
+        for widget, options in self.themed:
+            widget.config(**{option: c[name] for option, name in options.items()})
+        self.leftButton.restyle()
+        self.rightButton.restyle()
+
+    def refresh(self):
+        # Normal state: Clear history and Close. While confirming: Cancel and Clear
+        if self.confirming:
+            self.note.config(text="Delete all saved ratings from this computer?")
+            self.leftButton.set_enabled(True)
+            self.leftButton.set_text("Cancel")
+            self.leftButton.command = self.cancel_clear
+            self.rightButton.set_text("Clear")
+            self.rightButton.command = self.clear
+        else:
+            self.leftButton.set_text("Clear history")
+            self.leftButton.command = self.ask_to_clear
+            self.rightButton.set_text("Close")
+            self.rightButton.command = self.close
+            self.leftButton.set_enabled(bool(history.load()))
+
+    def ask_to_clear(self):
+        self.confirming = True
+        self.refresh()
+
+    def cancel_clear(self):
+        self.confirming = False
+        self.note.config(text="")
+        self.refresh()
+
+    def clear(self):
+        done = history.clear()
+        self.confirming = False
+        self.refresh()
+        self.note.config(text="History cleared." if done else "Could not delete the history file.")
+        if done:
+            self.app.history_cleared()
+
+    def close(self):
+        self.app.about = None
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+
+
 class FaceRaterApp:
     def __init__(self, root):
         self.root = root
@@ -442,6 +555,12 @@ class FaceRaterApp:
         self.message = None
         self.themed = []  # (widget, {option: colour name}), everything that changes colour with the theme
         self.photo = None
+        self.about = None  # the About window while it's open
+        self.currentSource = "camera"  # where the picture came from, "camera" or "file"
+        self.ratedPicture = None  # the picture the lines below belong to
+        self.ratedInfo = {}  # model -> what the history said when this picture was rated against it
+        self.tips = None  # the photo tips for ratedPicture
+        self.trend = None  # "up", "down" or None: is the score above your average
 
         # Windows' screen scaling (1.0 at 100%). tk scaling is pixels per point, which is 96/72 at 100%
         self.scale = float(self.root.tk.call("tk", "scaling")) / (96 / 72)
@@ -561,8 +680,8 @@ class FaceRaterApp:
         right.grid(row=0, column=1, sticky="ns", padx=(px(PAD), 0))
         # Rows 1, 3 and 5 are empty gaps. The score sits close under the toggle and the stats close under the score.
         # All the spare height goes in the last gap, so the column reads as a top group and an action group at the bottom
-        right.rowconfigure(1, minsize=px(48))
-        right.rowconfigure(3, minsize=px(32))
+        right.rowconfigure(1, minsize=px(36))
+        right.rowconfigure(3, minsize=px(28))
         right.rowconfigure(5, weight=1, minsize=px(16))
         panelW = px(PANEL_WIDTH)
         self.customWidgets = []
@@ -573,7 +692,13 @@ class FaceRaterApp:
             return frame
 
         header = group(0, "nw")
-        self.label(header, "Face Rater", "title", anchor="w").pack(anchor="w")
+        titleRow = self.themed_widget(tk.Frame(header), bg="bg")
+        titleRow.pack(fill="x")
+        titleRow.columnconfigure(0, weight=1)
+        self.label(titleRow, "Face Rater", "title", anchor="w").grid(row=0, column=0, sticky="w")
+        self.aboutButton = RoundButton(titleRow, self, "i", self.show_about, False, px(30), px(30))
+        self.aboutButton.grid(row=0, column=1, sticky="e")
+        self.customWidgets.append(self.aboutButton)
         self.label(header, "Compare with the model face of a", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
         self.gender = tk.StringVar(value="boy")
         self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
@@ -581,8 +706,12 @@ class FaceRaterApp:
         self.genderToggle.pack()
         self.customWidgets.append(self.genderToggle)
 
-        scoreGroup = group(2, "w")
-        self.label(scoreGroup, "Beauty score", "small", "muted", anchor="w").pack(anchor="w")
+        scoreGroup = group(2, "we")
+        captionRow = self.themed_widget(tk.Frame(scoreGroup), bg="bg")
+        captionRow.pack(fill="x")
+        self.label(captionRow, "Beauty score", "small", "muted", anchor="w").pack(side="left")
+        self.streakLabel = self.label(captionRow, "", "small", "muted", anchor="e")
+        self.streakLabel.pack(side="right")
         scoreRow = self.themed_widget(tk.Frame(scoreGroup), bg="bg")
         scoreRow.pack(fill="x")
         # The digits of this font are all equally wide, so the "/ 10" next to the number stays in place while it counts
@@ -593,6 +722,12 @@ class FaceRaterApp:
         lift = self.fonts["score"].metrics("descent") - self.fonts["scoreUnit"].metrics("descent")
         self.scoreUnit = self.label(scoreRow, "", "scoreUnit", "muted")
         self.scoreUnit.pack(side="left", anchor="s", padx=(px(10), 0), pady=(0, lift))
+        # An arrow with how far the score is above or below your average, on the right of the score
+        self.trendLabel = self.label(scoreRow, "", "bodyBold", "muted")
+        self.trendLabel.pack(side="right", anchor="s", pady=(0, lift))
+        # Your best and average for this model face, under the score
+        self.historyLabel = self.label(scoreGroup, "", "tiny", "muted", anchor="w")
+        self.historyLabel.pack(anchor="w")
 
         statsGroup = group(4, "w")
         self.clarityRow = self.make_stat_row(statsGroup, "Skin clarity", panelW, 0)
@@ -640,11 +775,15 @@ class FaceRaterApp:
             widget.restyle()
         self.statusPill.restyle()
         self.color_score(self.scoreActive, self.scoreColour)
+        self.color_trend()
         if self.lastPicture is not None:
             self.show_picture(self.lastPicture)
         else:
             self.redraw_message()
         self.style_title_bar()
+        if self.about is not None:
+            self.about.restyle()
+            self.style_title_bar(self.about)
 
     def check_theme(self):
         dark = windows_uses_dark_mode()
@@ -654,15 +793,16 @@ class FaceRaterApp:
             self.apply_theme()
         self.root.after(THEME_CHECK_DELAY, self.check_theme)
 
-    def style_title_bar(self):
-        # Makes the title bar match the theme (dark mode needs Windows 10 version 2004 or newer, the colour
-        # needs Windows 11). On anything older Windows just ignores it
+    def style_title_bar(self, tkWindow=None):
+        # Makes the title bar of the app (or of the given window) match the theme (dark mode needs Windows 10
+        # version 2004 or newer, the colour needs Windows 11). On anything older Windows just ignores it
         if sys.platform != "win32":
             return
+        tkWindow = tkWindow or self.root
         try:
             import ctypes
-            self.root.update_idletasks()
-            window = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            tkWindow.update_idletasks()
+            window = ctypes.windll.user32.GetParent(tkWindow.winfo_id())
             dark = ctypes.c_int(1 if self.dark else 0)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(window, 20, ctypes.byref(dark), 4)
             red, green, blue = ImageColor.getrgb(self.colors["bg"])
@@ -786,18 +926,20 @@ class FaceRaterApp:
         except ld.FaceError as e:
             messagebox.showerror("AI Face Rater", str(e))
             return
-        self.rate(picture)
+        self.rate(picture, source="file")
 
     def gender_changed(self):
         # Rate the same picture again against the other model face
         if self.mode == "result" and self.currentPicture is not None:
-            self.rate(self.currentPicture, self.currentMirrored)
+            self.rate(self.currentPicture, self.currentMirrored, self.currentSource)
 
-    def rate(self, picture, mirrored=False):
-        # mirrored=True shows the picture (and the result) mirrored, but rates it as it is
+    def rate(self, picture, mirrored=False, source="camera"):
+        # mirrored=True shows the picture (and the result) mirrored, but rates it as it is.
+        # source ("camera" or "file") is only saved in the history
         self.mode = "result"
         self.currentPicture = picture
         self.currentMirrored = mirrored
+        self.currentSource = source
         self.refresh_buttons()
         self.stop_animation()
         self.reset_result_panel()
@@ -816,17 +958,108 @@ class FaceRaterApp:
         self.set_status(f"Rated against the {self.gender.get()} model", NEUTRAL)
 
         clarity = result["clarity"]
+        skinNote = ""
         if clarity is None:
             self.clarityRow["value"].config(text="Not counted", fg=self.colors["muted"])
             self.clarityRow["bar"].set_value(None)
-            self.set_hint("Skin clarity is not counted: cheeks hidden, bearded or black-and-white.")
+            skinNote = "Skin clarity is not counted: cheeks hidden, bearded or black-and-white."
         else:
             self.clarityRow["value"].config(text=f"{round(clarity * 100)}%", fg=self.colors["text"])
             self.clarityRow["bar"].set_value(clarity)
         self.symmetryRow["value"].config(text=f"{round(result['symmetry'] * 100)}%", fg=self.colors["text"])
         self.symmetryRow["bar"].set_value(result["symmetry"])
         self.legend.show(True)
+
+        # What to show besides the score: tips about the photo, and how this compares with your earlier ones
+        if picture is not self.ratedPicture:
+            self.ratedPicture = picture
+            self.ratedInfo = {}
+            self.tips = self.photo_tips(picture)
+        self.set_hint("\n".join(self.fit_hint(([skinNote] if skinNote else []) + self.tips)))
+        self.show_history(self.history_info(result))
         self.animate_score(result["score"])
+
+    def wrapped_lines(self, text):
+        # How many lines the hint needs for a text (words are moved to the next line when they don't fit)
+        font = self.fonts["small"]
+        room = self.px(PANEL_WIDTH)
+        lines, line = 1, ""
+        for word in text.split():
+            candidate = f"{line} {word}".strip()
+            if line and font.measure(candidate) > room:
+                lines += 1
+                line = word
+            else:
+                line = candidate
+        return lines
+
+    def fit_hint(self, texts):
+        # The first texts that fit in the hint, which is HINT_LINES high. The first one is always kept
+        kept, used = [], 0
+        for text in texts:
+            used += self.wrapped_lines(text)
+            if kept and used > HINT_LINES:
+                break
+            kept.append(text)
+        return kept
+
+    def photo_tips(self, picture):
+        # The tip texts for a picture. Never fails: with no face or any other trouble there are just no tips
+        try:
+            small = phototips.shrink(picture)
+            found = ld.landmark_detect(small)
+            if found is None:
+                return []
+            xList, yList = found
+            angles = hp.head_angles(xList, yList, small.shape)
+            return phototips.tip_lines(phototips.measure(small, xList, yList, angles))
+        except Exception:
+            return []
+
+    def history_info(self, result):
+        # Saves this rating (once per picture and model face) and works out the best/average line and the streak
+        model = self.gender.get()
+        if model in self.ratedInfo:
+            return self.ratedInfo[model]
+        before = history.load()
+        history.record(model, result["score"], result["clarity"], result["symmetry"], self.currentSource)
+        everything = before + [history.Entry(datetime.now(), model, result["score"], result["clarity"], result["symmetry"],
+                                             self.currentSource)]
+        info = {"compare": history.compare(before, model, result["score"]), "streak": history.streak(everything)}
+        self.ratedInfo[model] = info
+        return info
+
+    def show_history(self, info):
+        compare = info["compare"]
+        if compare is None:
+            self.historyLabel.config(text="")
+            self.trend = None
+            self.trendLabel.config(text="")
+        else:
+            self.historyLabel.config(text=f"Your best: {compare['best']:.1f}  ·  Average: {compare['average']:.1f} "
+                                          f"({compare['count']} photos)")
+            self.trend = compare["trend"]
+            self.trendLabel.config(text="" if self.trend is None else
+                                   f"{'▲' if self.trend == 'up' else '▼'} {abs(compare['diff']):.1f}")
+            self.color_trend()
+        self.streakLabel.config(text=f"Day streak: {info['streak']}" if info["streak"] >= STREAK_SHOWN_FROM else "")
+
+    def color_trend(self):
+        # Above your average is the high-score colour, below it the low-score colour
+        colour = self.colors["scoreHigh"] if self.trend == "up" else self.colors["scoreLow"] if self.trend == "down" else self.colors["muted"]
+        self.trendLabel.config(fg=colour)
+
+    def history_cleared(self):
+        # The numbers shown for the current result came from the deleted history
+        self.ratedInfo = {}
+        self.ratedPicture = None
+        self.show_history({"compare": None, "streak": 0})
+
+    def show_about(self):
+        if self.about is None:
+            self.about = AboutDialog(self)
+        else:
+            self.about.lift()
 
     def animate_score(self, score, duration=1.5):
         # Count up to the score, like the terminal version did
@@ -874,6 +1107,7 @@ class FaceRaterApp:
             row["value"].config(text="–", fg=self.colors["muted"])
             row["bar"].set_value(None)
         self.legend.show(False)
+        self.show_history({"compare": None, "streak": 0})
         self.set_hint(self.cameraHint if self.mode == "camera" else "")
 
     def set_hint(self, text):
