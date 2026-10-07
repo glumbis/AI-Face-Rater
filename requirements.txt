@@ -1,4 +1,4 @@
-dlib>=19.24
-opencv-python>=4.8
+mediapipe>=1.1
+opencv-contrib-python>=4.8,<5
 numpy>=1.26
 pillow>=9.1

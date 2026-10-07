@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 HISTORY_FILE = "history.csv"
 COLUMNS = ["time", "model", "score", "clarity", "symmetry", "source"]
-MODELS = ("boy", "girl")
+MODELS = ("boy", "girl", "average")
 # The up/down arrow only shows when the score is at least this far from your earlier average
 TREND_MIN_DIFF = 0.1
 
@@ -16,7 +16,7 @@ TREND_MIN_DIFF = 0.1
 @dataclass
 class Entry:
     when: datetime
-    model: str  # "boy" or "girl"
+    model: str  # "boy", "girl" or "average"
     score: float
     clarity: float | None
     symmetry: float

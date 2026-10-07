@@ -32,57 +32,35 @@ REFUSED_MESSAGES = {
 }
 
 # ---------- Measuring the angles ----------
-# Where landmarks are on an average head in 3D (nose tip at 0, y up, z towards the camera, about 5 units per mm).
-# The first six are the classic head model, the rest are spread out over the face, the jaw and the brows: more points
-# and a wider spread make the angles about 3 times steadier. Sideways and up-down positions follow the average
-# of the two model faces (perBoy.jpg and perGirl.jpg) so a face looking straight into the camera reads as about 0 degrees.
-HEAD_MODEL_POINTS = {
-    30: (0.0, 0.0, 0.0),           # nose tip
-    27: (0.0, 197.0, -115.0),      # top of the nose, between the eyes
-    33: (0.0, -54.0, -80.0),       # under the nose
-    31: (-60.0, -34.0, -90.0),     # nostril wings
-    35: (60.0, -34.0, -90.0),
-    36: (-225.0, 200.0, -135.0),   # outer eye corners
-    45: (225.0, 200.0, -135.0),
-    39: (-96.0, 187.0, -105.0),    # inner eye corners
-    42: (96.0, 187.0, -105.0),
-    48: (-132.0, -135.0, -125.0),  # mouth corners
-    54: (132.0, -135.0, -125.0),
-    51: (0.0, -116.0, -100.0),     # middle of the upper and lower lip
-    57: (0.0, -204.0, -105.0),
-    8: (0.0, -355.0, -65.0),       # chin
-    2: (-315.0, 32.0, -330.0),     # the jaw, by the ears
-    14: (315.0, 32.0, -330.0),
-    4: (-270.0, -150.0, -285.0),   # the jaw, further down
-    12: (270.0, -150.0, -285.0),
-    17: (-300.0, 280.0, -150.0),   # outer ends of the eyebrows
-    26: (300.0, 280.0, -150.0),
-}
-HEAD_LANDMARKS = list(HEAD_MODEL_POINTS)
-HEAD_MODEL = np.array([HEAD_MODEL_POINTS[n] for n in HEAD_LANDMARKS], dtype=np.float64)
+# MediaPipe's Face Landmarker also says how the head is placed in 3D: a 4x4 matrix that moves a standard head into
+# the camera's view, where the head is moved, turned and resized. Only the turning part is used here. Which way the
+# front of the face points follows from it, and from that the turn and the tilt.
+# Raw, a head looking straight into the camera reads about 9 to 14 degrees down, because the standard head's front
+# doesn't point the way a head looking at the camera does. This is taken off the tilt, so a face looking straight
+# into the camera reads as about 0 degrees. 14 makes the two model faces (perBoy.jpg and perGirl.jpg) read
+# about the same as they did with the old measurement from landmarks (a few degrees up, and level)
+TILT_OFFSET = 14.0
 
 
-def head_angles(xList, yList, imgShape):
-    # Returns (turn, tilt) in degrees from the 68 landmarks, or None if it can't be worked out.
-    # turn is to the side (the sign says which side), tilt is positive when looking down and negative when looking up. This is the one place that works out the angles
-    h, w = imgShape[:2]
-    points = np.array([(xList[p], yList[p]) for p in HEAD_LANDMARKS], dtype=np.float64)
-    # A normal webcam/phone camera: focal length about the picture width. Pretending the camera looks straight at
-    # the nose tip means the answer doesn't change with where the face is in the picture (a face low in a photo
-    # would otherwise look tilted down, even if the photo was just cropped differently)
-    camera = np.array([[w, 0, xList[30]], [0, w, yList[30]], [0, 0, 1]], dtype=np.float64)
-    # Start from a head facing the camera a bit away. HEAD_MODEL has y up and the camera y down, so that's the
-    # head turned half a round around the x axis. Without this guess it sometimes lands on an upside-down answer
-    rotation = np.array([[np.pi], [0.0], [0.0]])
-    position = np.array([[0.0], [0.0], [3000.0]])
-    ok, rotation, _ = cv2.solvePnP(HEAD_MODEL, points, camera, None, rotation, position,
-                                   useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
-    if not ok:
+def head_angles(matrix):
+    # Returns (turn, tilt) in degrees from the head matrix of a MediaPipe face (4x4, or just the 3x3 turning part),
+    # or None if it can't be worked out.
+    # turn is to the side (positive when the face points to the right in the picture), tilt is positive when looking
+    # down and negative when looking up. This is the one place that works out the angles
+    try:
+        rotation = np.asarray(matrix, dtype=np.float64)[:3, :3]
+    except (TypeError, ValueError, IndexError):
         return None
-    # Which way the front of the face points, in the camera's directions (x right, y down, z away from the camera)
-    forward = cv2.Rodrigues(rotation)[0] @ np.array([0.0, 0.0, 1.0])
-    turn = np.degrees(np.arctan2(forward[0], -forward[2]))
-    tilt = np.degrees(np.arctan2(forward[1], -forward[2]))
+    if rotation.shape != (3, 3) or not np.all(np.isfinite(rotation)):
+        return None
+    # The matrix also resizes the head, so make each column length 1 to be left with only the turning
+    lengths = np.linalg.norm(rotation, axis=0)
+    if np.any(lengths < 1e-9):
+        return None
+    # Which way the front of the face points. MediaPipe's camera has x to the right, y up and z towards the viewer
+    forward = (rotation / lengths) @ np.array([0.0, 0.0, 1.0])
+    turn = np.degrees(np.arctan2(forward[0], forward[2]))
+    tilt = np.degrees(np.arctan2(-forward[1], forward[2])) - TILT_OFFSET
     return float(turn), float(tilt)
 
 
@@ -97,9 +75,9 @@ def problem_for(turn, tilt, maxTurn=MAX_TURN, maxTilt=MAX_TILT):
     return None
 
 
-def facing_problem(xList, yList, imgShape):
-    # Returns None if the face is facing the camera well enough to be rated, otherwise "side", "down" or "up"
-    angles = head_angles(xList, yList, imgShape)
+def facing_problem(angles):
+    # Returns None if the face is facing the camera well enough to be rated, otherwise "side", "down" or "up".
+    # angles is (turn, tilt) from head_angles, or None when they couldn't be worked out (then the picture is rated)
     if angles is None:
         return None
     return problem_for(*angles)

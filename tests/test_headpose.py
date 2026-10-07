@@ -1,51 +1,135 @@
 import os
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_DIR)
 
 import headpose as hp  # noqa: E402
 
 
-# ---------- head_angles on a made-up head ----------
+# ---------- head_angles from the head matrix ----------
 
-def landmarks_of_head(turn, tilt, width=640):
-    # Photographs HEAD_MODEL turned/tilted by the given degrees with a pinhole camera, and returns 68-long lists
-    # (only the landmarks the model uses are filled in)
+def matrix_of_head(turn, tilt, size=1.0, move=(3.0, -2.0, -30.0)):
+    # A 4x4 head matrix like MediaPipe gives (its camera has x to the right, y up and z towards the viewer; the
+    # standard head looks along +z): the head turned `turn` degrees to the right and `tilt` degrees down,
+    # resized and moved
     t, p = np.radians(turn), np.radians(tilt)
-    turnMatrix = np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
-    tiltMatrix = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])
-    # The model has y up and z towards the camera, the camera has y down and z away
-    points = hp.HEAD_MODEL * [1, -1, -1]
-    centre = np.array([0.0, 0.0, 300.0])
-    points = (tiltMatrix @ turnMatrix @ (points - centre).T).T + centre + [0, 0, 3000]
-    xList, yList = [0.0] * 68, [0.0] * 68
-    for n, (x, y, z) in zip(hp.HEAD_LANDMARKS, points):
-        xList[n] = 320 + width * x / z
-        yList[n] = 240 + width * y / z
-    return xList, yList
+    turning = np.array([[np.cos(t), 0, np.sin(t)], [0, 1, 0], [-np.sin(t), 0, np.cos(t)]])
+    tilting = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])
+    matrix = np.eye(4)
+    matrix[:3, :3] = size * turning @ tilting
+    matrix[:3, 3] = move
+    return matrix
+
+
+def raw(turn, tilt):
+    # What the matrix of a head that is turned and tilted this much *as the standard head* gives: the tilt that is
+    # taken off (TILT_OFFSET) is added, so the answer is the angles that were asked for
+    return matrix_of_head(turn, tilt + hp.TILT_OFFSET)
 
 
 def test_straight_head_is_about_zero():
-    turn, tilt = hp.head_angles(*landmarks_of_head(0, 0), (480, 640))
-    assert abs(turn) < 1 and abs(tilt) < 1
+    turn, tilt = hp.head_angles(raw(0, 0))
+    assert abs(turn) < 0.01 and abs(tilt) < 0.01
+
+
+def test_the_standard_head_reads_the_offset_lower():
+    # The offset is the one thing that is taken off, so a head turned like the standard head reads -TILT_OFFSET
+    turn, tilt = hp.head_angles(np.eye(4))
+    assert turn == pytest.approx(0) and tilt == pytest.approx(-hp.TILT_OFFSET)
+
+
+@pytest.mark.parametrize("turn", [-40, -20, -5, 5, 20, 40])
+def test_turning_to_the_right_is_positive_and_to_the_left_negative(turn):
+    # (turned like the standard head otherwise, so only the offset is taken off the tilt)
+    got_turn, got_tilt = hp.head_angles(matrix_of_head(turn, 0))
+    assert got_turn == pytest.approx(turn, abs=0.01)
+    assert got_tilt == pytest.approx(-hp.TILT_OFFSET, abs=0.01)
+
+
+@pytest.mark.parametrize("tilt", [-40, -20, -5, 5, 20, 40])
+def test_looking_down_is_positive_and_looking_up_negative(tilt):
+    got_turn, got_tilt = hp.head_angles(raw(0, tilt))
+    assert got_tilt == pytest.approx(tilt, abs=0.01)
+    assert got_turn == pytest.approx(0, abs=0.01)
+
+
+def test_turn_and_tilt_together():
+    turn, tilt = hp.head_angles(raw(10, 8))
+    assert turn == pytest.approx(10, abs=1.5) and tilt == pytest.approx(8, abs=1.5)
+
+
+def test_size_and_place_of_the_head_do_not_matter():
+    assert hp.head_angles(matrix_of_head(15, 20, size=1.0)) == pytest.approx(hp.head_angles(matrix_of_head(15, 20, size=3.7, move=(-40, 9, -120))))
+    # The 3x3 turning part alone works as well
+    assert hp.head_angles(matrix_of_head(15, 20)[:3, :3]) == pytest.approx(hp.head_angles(matrix_of_head(15, 20)))
+
+
+@pytest.mark.parametrize("matrix", [None, "head", [], np.zeros((4, 4)), np.full((4, 4), np.nan), np.eye(2), np.zeros(9)],
+                         ids=["none", "text", "empty", "zeros", "nan", "2x2", "flat"])
+def test_a_matrix_that_is_no_use_gives_no_angles(matrix):
+    assert hp.head_angles(matrix) is None
 
 
 @pytest.mark.parametrize("turn", [-35, 35])
 def test_a_head_turned_far_is_refused(turn):
-    xList, yList = landmarks_of_head(turn, 0)
-    assert hp.facing_problem(xList, yList, (480, 640)) == "side"
+    assert hp.facing_problem(hp.head_angles(raw(turn, 0))) == "side"
 
 
 def test_a_head_tilted_far_down_or_up_is_refused():
-    assert hp.facing_problem(*landmarks_of_head(0, 35), (480, 640)) == "down"
-    assert hp.facing_problem(*landmarks_of_head(0, -35), (480, 640)) == "up"
+    assert hp.facing_problem(hp.head_angles(raw(0, 35))) == "down"
+    assert hp.facing_problem(hp.head_angles(raw(0, -35))) == "up"
 
 
 def test_a_slightly_turned_head_is_still_rated():
-    assert hp.facing_problem(*landmarks_of_head(10, 8), (480, 640)) is None
+    assert hp.facing_problem(hp.head_angles(raw(10, 8))) is None
+
+
+def test_no_angles_means_nothing_is_refused():
+    assert hp.facing_problem(None) is None
+
+
+# ---------- head_angles on the two model faces ----------
+
+def model_pictures():
+    landmarkdetect = pytest.importorskip("landmarkdetect")
+    if not os.path.isfile(landmarkdetect.LANDMARKER_PATH):
+        pytest.skip("face_landmarker.task is missing")
+    return landmarkdetect, [landmarkdetect.read_image(os.path.join(REPO_DIR, name)) for name in ("perBoy.jpg", "perGirl.jpg")]
+
+
+def test_the_model_faces_read_as_facing_the_camera():
+    # The old measurement (20 landmarks and solvePnP) gave about (0, -4.7) and (-1, -0.3) for these two pictures
+    landmarkdetect, pictures = model_pictures()
+    boy, girl = (landmarkdetect.detect_face(p).angles for p in pictures)
+    assert abs(boy[0]) < 2 and -7 < boy[1] < -3
+    assert abs(girl[0]) < 2 and -2 < girl[1] < 2
+
+
+def test_a_mirrored_picture_turns_the_other_way_and_tilts_the_same():
+    landmarkdetect, pictures = model_pictures()
+    for picture in pictures:
+        turn, tilt = landmarkdetect.detect_face(picture).angles
+        flippedTurn, flippedTilt = landmarkdetect.detect_face(cv2.flip(picture, 1)).angles
+        assert flippedTurn == pytest.approx(-turn, abs=1.5)
+        assert flippedTilt == pytest.approx(tilt, abs=1.5)
+
+
+@pytest.mark.parametrize("degrees", [-15, 15])
+def test_a_picture_turned_in_its_own_plane_barely_changes_the_angles(degrees):
+    # Rolling the head sideways is not turning or tilting it
+    landmarkdetect, pictures = model_pictures()
+    for picture in pictures:
+        h, w = picture.shape[:2]
+        rolled = cv2.warpAffine(picture, cv2.getRotationMatrix2D((w / 2, h / 2), degrees, 1), (w, h),
+                                borderMode=cv2.BORDER_REPLICATE)
+        before, after = landmarkdetect.detect_face(picture).angles, landmarkdetect.detect_face(rolled).angles
+        assert abs(after[0] - before[0]) < 6 and abs(after[1] - before[1]) < 4
+        assert landmarkdetect.facing_problem(after) is None
 
 
 # ---------- HeadTracker ----------
