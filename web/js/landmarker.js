@@ -84,17 +84,22 @@ async function create(mode, delegate, mp, fileset, model) {
 }
 
 // mode is "IMAGE" or "VIDEO". Returns { mode, delegate, detect(source, timestampMs), close() }.
+// IMAGE (rating a still photo) always runs on the CPU: the GPU delegate gives landmarks that are off by about 0.9 % of
+// the eye distance (1.6 px on a 640 px photo), and the model faces and the desktop app's numbers come from the CPU
+// path, so the GPU would rate the same photo up to a point lower. VIDEO (the live preview) uses the GPU when there is
+// one, because it only draws the dots and needs the speed.
 // detect gives { points478px: [[x, y] * 478], matrix: 4x4 rows or null } for the biggest face, or null if there is none.
 // The points are in the pixels of the source: x = x_norm * width - 0.5, like the Python app.
 // VIDEO mode needs a timestamp in milliseconds that grows with every call.
 export async function createLandmarker(mode, onProgress) {
   const { mp, fileset } = await loadLibrary();
   const model = await loadModel(onProgress);
-  let delegate = 'GPU';
+  let delegate = mode === 'IMAGE' ? 'CPU' : 'GPU';
   let landmarker;
   try {
-    landmarker = await create(mode, 'GPU', mp, fileset, model);
+    landmarker = await create(mode, delegate, mp, fileset, model);
   } catch (e) {
+    if (delegate === 'CPU') throw e;
     console.info('GPU delegate not available, using the CPU.', e);
     delegate = 'CPU';
     landmarker = await create(mode, 'CPU', mp, fileset, model);
