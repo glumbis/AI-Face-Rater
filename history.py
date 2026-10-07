@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 HISTORY_FILE = "history.csv"
 COLUMNS = ["time", "model", "score", "clarity", "symmetry", "source"]
 MODELS = ("boy", "girl", "average")
-# The up/down arrow only shows when the score is at least this far from your earlier average
+# The up/down arrow only shows when the score is at least this far from your previous photo's score
 TREND_MIN_DIFF = 0.1
 
 
@@ -84,13 +84,13 @@ def clear(folder=None):
 
 def compare(entries, model, score):
     # How a new score looks next to the earlier ones for the same model face. entries are the ratings from before
-    # this one. Returns None when there is nothing to compare with, otherwise a dict with best and average (both
-    # including the new score), count (including it), trend ("up", "down" or None) and diff (the new score minus
-    # the earlier average)
+    # this one, oldest first. Returns None when there is nothing to compare with, otherwise a dict with best and
+    # average (both including the new score), count (including it), trend ("up", "down" or None) and diff (the new
+    # score minus the previous photo's score, the last earlier rating for this model face)
     earlier = [e.score for e in entries if e.model == model]
     if not earlier:
         return None
-    diff = score - sum(earlier) / len(earlier)
+    diff = score - earlier[-1]
     trend = "up" if diff >= TREND_MIN_DIFF else "down" if diff <= -TREND_MIN_DIFF else None
     allScores = earlier + [score]
     return {"best": max(allScores), "average": sum(allScores) / len(allScores), "count": len(allScores),

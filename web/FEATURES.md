@@ -19,7 +19,7 @@ A static website that does the same as the desktop app, entirely in the browser.
 6. **Photo tips.** At most two tips, about the photo and setup only (angle, blur, light, distance). There are the same rules as `phototips.py`.
 7. **Local history** (localStorage, numbers only)
    - "Your best · Average (n photos)".
-   - A ▲/▼ arrow against your average.
+   - A ▲/▼ arrow with the difference "since last photo" (your previous photo for the same reference, none on the first).
    - The day streak.
    - Clear history.
 8. **About ("i") panel** with one line, "Photos are processed on this device and never uploaded.", plus Clear history.
@@ -53,7 +53,7 @@ Later (not v1): a history chart, an explanation view (which regions differ from 
 | `js/scoring.js` | scoring agent | `rateFace(imageData, points478px, matrix, reference)` → `{score, clarity, symmetry, shapeError, skinPenalty, symmetryPenalty, cheeks:[{x1,y1,x2,y2,w,h,mask:Uint8Array}]}`, or throws `FaceError(message)`. Also `shapeError(points, reference)`, `symmetry(points)`, `align(points, target, weights)` |
 | `js/headpose.js` | scoring agent | `headAngles(matrix)` → `{turn, tilt}`; `facingProblem(angles)` → `null \| "side" \| "up" \| "down"`; `class HeadTracker` (`add(angles)`, `.hint` → `null` or kind); `class RecentFrames` (`add(frameCanvas, angles, sharpness)`, `best()`, `reset()`); `sharpness(imageData)` |
 | `js/tips.js` | features agent | `photoTips(imageData, points478px, angles)` → `string[]` (at most 2, or the single "great setup" line) |
-| `js/history.js` | features agent | `addRating({reference, score, clarity, symmetry, source})`, `stats(reference)` → `{best, average, count, trend, streak}`, `clearHistory()` |
+| `js/history.js` | features agent | `addRating({reference, score, clarity, symmetry, source})`, `stats(reference)` → `{best, average, count, trend, diff, streak}` (`trend` is `"up"`, `"down"` or `null` and `diff` is the score minus the previous photo's, both against the previous photo), `clearHistory()` |
 | `js/share.js` | features agent | `makeShareCard({score, clarity, symmetry, reference, stats, theme})` → `Promise<Blob>`, `shareOrDownload(blob)` |
 | `sw.js`, `manifest.webmanifest`, icons | features agent | offline caching and install |
 | `index.html`, `css/app.css`, `js/app.js`, `js/landmarker.js`, `js/overlay.js` | UI agent | the page, MediaPipe setup (`createLandmarker(mode)`, `detect(source, ts)` → `{points478px, matrix}` for the largest face, or `null`), camera, states, drawing, wiring of all modules |

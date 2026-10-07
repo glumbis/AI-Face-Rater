@@ -207,23 +207,23 @@ await test('first rating: count 1, best = average = the score, no trend', () => 
   const s = history.stats('boy', NOW);
   eq([s.best, s.average, s.count, s.trend], [6, 6, 1, null]);
 });
-await test('best, average, count and trend against the EARLIER average', () => {
+await test('best, average, count and trend against the PREVIOUS photo', () => {
   fresh();
   rate('boy', 6.0, { now: at(15, 9) });
   rate('boy', 7.0, { now: at(15, 10) });
   let s = history.stats('boy', NOW);
   eq([s.best, s.average, s.count, s.trend], [7, 6.5, 2, 'up']);
   near(s.diff, 1, 1e-9);
-  rate('boy', 6.5, { now: at(15, 11) });          // equals the earlier average 6.5: no arrow
+  rate('boy', 7.05, { now: at(15, 11) });         // 0.05 above the previous 7.0: no arrow
   s = history.stats('boy', NOW);
-  eq([s.best, s.count, s.trend], [7, 3, null]);
-  rate('boy', 5.0, { now: at(15, 12) });          // 1.5 below
+  eq([s.best, s.count, s.trend], [7.05, 3, null]);
+  rate('boy', 5.0, { now: at(15, 12) });          // 2.05 below the previous 7.05 (the average is not used)
   s = history.stats('boy', NOW);
   eq([s.trend, s.count], ['down', 4]);
-  near(s.average, 6.125, 1e-9);
-  near(s.diff, -1.5, 1e-9);
+  near(s.average, 6.2625, 1e-9);
+  near(s.diff, -2.05, 1e-9);
 });
-await test('trend needs a difference of 0.1 from the earlier average, like Python', () => {
+await test('trend needs a difference of 0.1 from the previous photo, like Python', () => {
   fresh();
   rate('girl', 5.0, { now: at(15, 9) });
   rate('girl', 5.125, { now: at(15, 10) });
