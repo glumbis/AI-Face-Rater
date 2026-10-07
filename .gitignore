@@ -1,5 +1,6 @@
 .env
 __pycache__/
+.pytest_cache/
 
 # Pictures are not stored in this repo, except the two model faces
 *.jpg
@@ -8,8 +9,11 @@ __pycache__/
 !perBoy.jpg
 !perGirl.jpg
 
-# Created when you rate faces with datasetfacerater.py
+# Created when you rate faces with dataset_rater.py
 ratings.csv
+ratings.csv.tmp
+# Remembers the last folder dataset_rater.py used
+dataset_rater_settings.json
 
 # Large dlib model - download separately
 shape_predictor_68_face_landmarks.dat
