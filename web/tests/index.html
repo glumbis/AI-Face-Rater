@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scoring tests</title>
+<style>
+  :root { --bg: #fff; --fg: #1a1a1a; --ok: #15803d; --bad: #b91c1c; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #151515; --fg: #eee; --ok: #4ade80; --bad: #f87171; --line: #333; } }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p { margin: 0 0 10px; max-width: 70ch; }
+  #summary { font-weight: 600; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+  #summary.pass { color: var(--ok); border-color: var(--ok); }
+  #summary.fail { color: var(--bad); border-color: var(--bad); }
+  pre { white-space: pre-wrap; font: 12px/1.45 ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<h1>Scoring and head pose tests</h1>
+<p>Runs <code>js/scoring.js</code> and <code>js/headpose.js</code> on <code>golden.json</code>, which
+<code>tools/make_golden.py</code> makes from the Python app. Tolerances: score 0.05, clarity 0.02, angles 0.2 degrees.
+Serve the <code>web</code> folder (<code>py -3.14 -m http.server 8101 -d web</code>) and open <code>/tests/</code>.</p>
+<div id="summary">RUNNING</div>
+<pre id="out"></pre>
+<script type="module" src="tests.js"></script>
+</body>
+</html>
