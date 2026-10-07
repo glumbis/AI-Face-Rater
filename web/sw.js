@@ -1,7 +1,8 @@
 // Service worker: the app works offline after the first visit.
-//   - App shell (page, css, scripts, icons): cached when installed, then served cache-first. The cache name carries
-//     BUILD, which the deploy workflow replaces with the commit hash, so every deploy gets a fresh cache and the old
-//     ones are deleted. Not stamped (local development): the network goes first, so edits show up with a reload.
+//   - App shell (page, css, scripts, icons): network-first, so a new deploy shows up on the next visit, with the
+//     cached copy used offline. Each fetch asks the server whether the file changed (cache: 'no-cache'), so the
+//     browser's own HTTP cache (GitHub Pages allows 10 minutes) can't hand back an old file. The cache name carries
+//     BUILD, which the deploy workflow replaces with the commit hash, so old caches are deleted after a deploy.
 //   - face_landmarker.task: cache-first in a cache of its own that survives deploys (bump MODEL_CACHE if the model
 //     file is ever replaced).
 //   - MediaPipe from jsDelivr: cached when first used. Pinned URLs (with @x.y.z) never change, so they are served
@@ -10,7 +11,6 @@
 //   - Nothing else is touched: the leaderboard's calls to Supabase (another origin, never jsDelivr) are not handled
 //     here at all, so they always go straight to the network and are never cached.
 const BUILD = '__BUILD__';
-const DEV = BUILD.startsWith('__');
 const SHELL_CACHE = `afr-shell-${BUILD}`;
 const MODEL_CACHE = 'afr-model-v1';
 const CDN_CACHE = 'afr-cdn-v1';
@@ -31,7 +31,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     // File by file: one that doesn't exist (yet) must not stop the others from being cached
     const shell = await caches.open(SHELL_CACHE);
-    await Promise.allSettled(SHELL.map((p) => shell.add(scoped(p))));
+    await Promise.allSettled(SHELL.map((p) => shell.add(new Request(scoped(p), { cache: 'reload' }))));
     const models = await caches.open(MODEL_CACHE);
     if (!(await models.match(scoped(MODEL)))) await models.add(scoped(MODEL)).catch(() => {});
     await self.skipWaiting();
@@ -88,7 +88,8 @@ async function staleWhileRevalidate(request, cacheName) {
 async function networkFirst(request, cacheName, options) {
   const cache = await caches.open(cacheName);
   try {
-    const res = await fetch(request);
+    // A fresh request (a page visit's request can't be given other options), checked with the server
+    const res = await fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
     if (cacheable(res) && res.status === 200) cache.put(request, res.clone()).catch(() => {});
     return res;
   } catch (e) {
@@ -113,8 +114,7 @@ self.addEventListener('fetch', (event) => {
     const options = { ignoreSearch: true };
     event.respondWith((async () => {
       try {
-        const res = await (DEV ? networkFirst(request, SHELL_CACHE, options) : cacheFirst(request, SHELL_CACHE, options));
-        return res;
+        return await networkFirst(request, SHELL_CACHE, options);
       } catch (e) {
         // Offline and not cached: a page visit still gets the app
         if (request.mode === 'navigate') {
