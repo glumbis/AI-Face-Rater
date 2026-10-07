@@ -46,7 +46,7 @@ const el = {
   score: $('score'), scoreLive: $('scoreLive'), scoreNum: $('scoreNum'), scoreUnit: $('scoreUnit'), trend: $('trend'),
   streak: $('streak'), historyLine: $('historyLine'), histMeta: $('histMeta'), pbBadge: $('pbBadge'), spark: $('spark'),
   clarityVal: $('clarityVal'), clarityBar: $('clarityBar'), symmetryVal: $('symmetryVal'), symmetryBar: $('symmetryBar'),
-  legend: $('legend'), hint: $('hint'), primary: $('primaryBtn'), pick: $('pickBtn'), shareBtn: $('shareBtn'),
+  regions: $('regions'), legend: $('legend'), hint: $('hint'), primary: $('primaryBtn'), pick: $('pickBtn'), shareBtn: $('shareBtn'),
   file: $('file'), about: $('about'), aboutBtn: $('aboutBtn'), clearBtn: $('clearBtn'), clearNote: $('clearNote'),
   reference: $('reference'),
 };
@@ -179,6 +179,21 @@ function setBar(valueEl, barEl, value, text) {
   valueEl.closest('.stat').dataset.set = value === null ? 'false' : 'true';
 }
 
+// The score of each region of the face (result.regions, 0 to 10), best first: the cells are in face order in the HTML and
+// move with CSS order. The best and the weakest get a colour, and with no regions every cell goes back to a dash
+function showRegions(regions) {
+  const ranked = regions ? Object.keys(regions).sort((a, b) => regions[b] - regions[a]) : [];
+  for (const cell of el.regions.children) {
+    const key = cell.dataset.region, score = regions?.[key];
+    const rank = ranked.indexOf(key);
+    cell.querySelector('b').textContent = score === undefined ? '–' : score.toFixed(1);
+    cell.querySelector('.bar i').style.width = score === undefined ? '0%' : `${Math.round(score * 10)}%`;
+    cell.style.order = rank;
+    if (score === undefined) delete cell.dataset.rank;
+    else cell.dataset.rank = rank === 0 ? 'best' : rank === ranked.length - 1 ? 'worst' : 'mid';
+  }
+}
+
 function resetResultPanel() {
   cancelAnimationFrame(scoreAnimation);
   clearTimeout(scoreTimer);
@@ -191,6 +206,7 @@ function resetResultPanel() {
   showExtras([], false);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
+  showRegions(null);
   el.legend.classList.remove('on');
   el.shareBtn.hidden = true;
   el.shareBtn.disabled = false;
@@ -313,6 +329,7 @@ function showError(e, id) {
   el.picture.setAttribute('aria-label', PICTURE_LABEL);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
+  showRegions(null);
 }
 
 // Rates a new picture (a canvas) from the camera or a file
@@ -360,6 +377,7 @@ function renderResult() {
   const clarity = result.clarity ?? null;
   setBar(el.clarityVal, el.clarityBar, clarity, clarity === null ? 'Not counted' : undefined);
   setBar(el.symmetryVal, el.symmetryBar, result.symmetry);
+  showRegions(result.regions);
   el.legend.classList.add('on');
 
   if (cur.tips === null) {

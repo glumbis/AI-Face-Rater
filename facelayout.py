@@ -78,3 +78,6 @@ MIRROR_PAIRS = [position(_partner.get(i, i)) for i in SUBSET]
 REGION_WEIGHTS = {"jaw": 17 * 0.3, "brows": 10 * 0.6, "nose": 9 * 1.0, "eyes": 12 * 1.0,
                   "outerLips": 12 * 0.3, "innerLips": 0.0}
 POINT_WEIGHTS = [REGION_WEIGHTS[name] / len(points) for name, points in REGIONS.items() for _ in points]
+
+# The regions that count, as positions in the 162 lists (the inner lips don't count, so they get no score of their own)
+REGION_POINTS = {name: [position(i) for i in points] for name, points in REGIONS.items() if REGION_WEIGHTS[name] > 0}

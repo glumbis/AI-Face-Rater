@@ -107,6 +107,7 @@ def main():
     exports = {
         "SUBSET": facelayout.SUBSET,
         "REGIONS": facelayout.REGIONS,
+        "REGION_POINTS": facelayout.REGION_POINTS,
         "WEIGHTS": [float(w) for w in facelayout.POINT_WEIGHTS],
         "MIRROR": facelayout.MIRROR_PAIRS,
         "CHEEK_LEFT": facelayout.LEFT_CHEEK_POINTS,
@@ -127,6 +128,7 @@ def main():
     comments = {
         "SUBSET": "MediaPipe landmark numbers used (162 of the 478). Everything below is in the order of SUBSET.",
         "REGIONS": "SUBSET split by region, as MediaPipe landmark numbers.",
+        "REGION_POINTS": "The regions that count (not the inner lips) as positions in the 162 list, for the region scores.",
         "WEIGHTS": "How much each of the 162 points counts in alignment and error.",
         "MIRROR": "For each of the 162 points, the position of its left/right partner (itself on the middle line).",
         "CHEEK_LEFT": "Positions (in the 162 list) around the left cheek, as seen in the picture.",
@@ -142,7 +144,7 @@ def main():
         "CONST_LANDMARKDETECT": "The same constants per module (CONST_HEADPOSE, CONST_PHOTOTIPS): use these for names more than one module defines.",
         "SOURCE_HASH": "Hash of the Python sources this file was made from (golden.json carries the same one).",
     }
-    object_exports = ("MODEL_FACES", "MODEL_FACE_NAMES", "REGIONS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE",
+    object_exports = ("MODEL_FACES", "MODEL_FACE_NAMES", "REGIONS", "REGION_POINTS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE",
                       "CONST_PHOTOTIPS")
     lines = [
         "// GENERATED FILE. Do not edit by hand.",

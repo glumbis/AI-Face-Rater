@@ -85,6 +85,8 @@ TIP_TEXT = "Look straight at the camera."
 NO_CAMERA_TEXT = "Pick a photo to get started."
 # The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
 HINT_LINES = 3
+# What the regions of the face are called in the result (the keys of the "regions" the rating gives)
+REGION_NAMES = {"eyes": "Eyes", "nose": "Nose", "brows": "Brows", "outerLips": "Lips", "jaw": "Jaw"}
 # The legend's swatches are little dark chips (the lines on the picture are white, so they need a dark background
 # to be seen on the window's light colours) with the same colours as overlay.py draws with
 LEGEND_CHIP = "#444444"
@@ -157,6 +159,12 @@ class Camera:
 
 
 # ---------- Drawing helpers ----------
+
+def region_text(regions):
+    # The region scores best first in one line that fits the panel: "Eyes 9.1 · Nose 8.4 · Brows 7.2 · Lips 6.3 · Jaw 5.0"
+    ranked = sorted(regions, key=lambda name: -regions[name])
+    return " \u00b7 ".join(f"{REGION_NAMES[name]} {regions[name]:.1f}" for name in ranked)
+
 
 def windows_uses_dark_mode():
     # Reads the "Choose your mode" setting from Windows. Anywhere else, or if it can't be read, use light
@@ -710,9 +718,9 @@ class FaceRaterApp:
         right.grid(row=0, column=1, sticky="ns", padx=(px(PAD), 0))
         # Rows 1, 3 and 5 are empty gaps. The score sits close under the toggle and the stats close under the score.
         # All the spare height goes in the last gap, so the column reads as a top group and an action group at the bottom
-        right.rowconfigure(1, minsize=px(36))
-        right.rowconfigure(3, minsize=px(28))
-        right.rowconfigure(5, weight=1, minsize=px(16))
+        right.rowconfigure(1, minsize=px(30))
+        right.rowconfigure(3, minsize=px(22))
+        right.rowconfigure(5, weight=1, minsize=px(12))
         panelW = px(PANEL_WIDTH)
         self.customWidgets = []
 
@@ -766,8 +774,12 @@ class FaceRaterApp:
         statsGroup = group(4, "w")
         self.clarityRow = self.make_stat_row(statsGroup, "Skin clarity", panelW, 0)
         self.symmetryRow = self.make_stat_row(statsGroup, "Symmetry", panelW, px(16))
+        # Which parts of the face are closest to the model face, best first, in one short line. It always takes up
+        # its line, so nothing moves when a result shows up
+        self.regionLabel = self.label(statsGroup, " ", "tiny", "muted", anchor="w")
+        self.regionLabel.pack(anchor="w", pady=(px(8), 0))
         self.legend = Legend(statsGroup, self, panelW, px(20))
-        self.legend.pack(anchor="w", pady=(px(14), 0))
+        self.legend.pack(anchor="w", pady=(px(10), 0))
         self.customWidgets.append(self.legend)
 
         # The hint sits right above the buttons. It is always this many lines high, so nothing moves when it changes
@@ -775,7 +787,7 @@ class FaceRaterApp:
         self.hint = tk.Label(bottom, text=TIP_TEXT, font=self.fonts["small"], justify="left", anchor="sw", bd=0, padx=0, pady=0,
                              wraplength=panelW, height=HINT_LINES, takefocus=0)
         self.themed_widget(self.hint, bg="bg", fg="hintText")
-        self.hint.pack(fill="x", pady=(0, px(16)))
+        self.hint.pack(fill="x", pady=(0, px(14)))
         self.takeButton = RoundButton(bottom, self, "Take photo", self.primary_clicked, True, panelW, px(48))
         self.takeButton.pack()
         self.pickButton = RoundButton(bottom, self, "Pick a photo…", self.pick_photo, False, panelW, px(44))
@@ -1012,6 +1024,7 @@ class FaceRaterApp:
             self.clarityRow["bar"].set_value(clarity)
         self.symmetryRow["value"].config(text=f"{round(result['symmetry'] * 100)}%", fg=self.colors["text"])
         self.symmetryRow["bar"].set_value(result["symmetry"])
+        self.regionLabel.config(text=region_text(result["regions"]), fg=self.colors["text"])
         self.legend.show(True)
 
         # What to show besides the score: tips about the photo, and how this compares with your earlier ones
@@ -1150,6 +1163,7 @@ class FaceRaterApp:
         for row in (self.clarityRow, self.symmetryRow):
             row["value"].config(text="–", fg=self.colors["muted"])
             row["bar"].set_value(None)
+        self.regionLabel.config(text=" ", fg=self.colors["muted"])
         self.legend.show(False)
         self.show_history({"compare": None, "streak": 0})
         self.set_hint(self.cameraHint if self.mode == "camera" else "")
