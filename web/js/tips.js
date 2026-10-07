@@ -6,9 +6,12 @@ import { CONST, SUBSET } from './facedata.js';
 
 // Constant lookup. Python names are used as they are (CONST.TURN_TIP and so on). headpose.py also has a
 // SHARPNESS_WIDTH (for another purpose), so the exporter may write phototips.py's one as PHOTOTIPS_SHARPNESS_WIDTH;
-// a prefixed name is preferred when it exists.
+// a prefixed name is preferred when it exists. Some phototips.py constants are just the limits of the live preview
+// (TURN_TIP = HINT_TURN, ...), so those names are the fallback.
+const ALIASES = { TURN_TIP: 'HINT_TURN', TILT_TIP: 'HINT_TILT', TOO_FAR_BELOW: 'HINT_FACE_SIZE' };
 function k(name) {
-  for (const key of ['PHOTOTIPS_' + name, name]) {
+  for (const key of ['PHOTOTIPS_' + name, name, ALIASES[name]]) {
+    if (!key) continue;
     const v = CONST?.[key];
     if (typeof v === 'number' && Number.isFinite(v)) return v;
   }
@@ -24,6 +27,7 @@ export const TIPS = {
   uneven: 'One side of your face is brighter. Face a window or lamp.',
   close: 'Step back a little. Very close photos distort faces.',
   far: 'Your face is small in the picture. Move a bit closer.',
+  small: 'Your face is small in the photo. A closer photo rates better.',
 };
 export const GREAT = 'Great setup: straight, sharp and evenly lit.';
 
@@ -202,6 +206,12 @@ function faceSize(box, w, h) {
   return Math.max((right - left) / w, (bottom - top) / h);
 }
 
+// The face height as a share of the picture's shorter side (the measure of landmarkdetect.face_size: the box goes
+// from the top of the forehead to the chin)
+function faceShare(box, w, h) {
+  return (box[3] - box[1]) / Math.min(w, h);
+}
+
 // angles: {turn, tilt} in degrees (headAngles), a [turn, tilt] pair, or null/undefined when unknown
 function anglesOf(angles) {
   if (!angles) return { turn: null, tilt: null };
@@ -209,8 +219,9 @@ function anglesOf(angles) {
   return { turn: angles.turn ?? null, tilt: angles.tilt ?? null };
 }
 
-// Everything the tips look at (phototips.measure)
-export function measure(imageData, points, angles) {
+// Everything the tips look at (phototips.measure). source is "camera" or "file" (a picked photo, where a smaller face
+// is fine)
+export function measure(imageData, points, angles, source = 'camera') {
   const { gray, factor } = shrink(toGray(imageData));
   const raw = faceBox(points);
   const box = factor === 1 ? raw : raw.map((v) => v * factor);
@@ -219,6 +230,7 @@ export function measure(imageData, points, angles) {
     turn: a.turn, tilt: a.tilt,
     sharpness: sharpness(gray, box), brightness: brightness(gray, box),
     imbalance: lightImbalance(gray, box), size: faceSize(box, gray.w, gray.h),
+    share: faceShare(box, gray.w, gray.h), source,
   };
 }
 
@@ -231,8 +243,10 @@ export function pickTips(m, maxTips = k('MAX_TIPS')) {
   if (m.brightness < k('TOO_DARK_BELOW')) found.push('dark');
   else if (m.brightness > k('TOO_BRIGHT_ABOVE')) found.push('bright');
   if (m.imbalance > k('UNEVEN_LIGHT_ABOVE')) found.push('uneven');
+  const share = m.share ?? 1.0;
   if (m.size > k('TOO_CLOSE_ABOVE')) found.push('close');
-  else if (m.size < k('TOO_FAR_BELOW')) found.push('far');
+  else if (m.source === 'file' && share < k('TOO_FAR_BELOW_FILE')) found.push('small');
+  else if (m.source !== 'file' && share < k('TOO_FAR_BELOW')) found.push('far');
   return found.slice(0, maxTips);
 }
 
@@ -242,11 +256,13 @@ export function tipLines(m, maxTips = k('MAX_TIPS')) {
   return keys.length ? keys.map((key) => TIPS[key]) : [GREAT];
 }
 
-// The module's entry point. Never throws: with no face or any other trouble there are just no tips
-export function photoTips(imageData, points478px, angles) {
+// The module's entry point. angles is {turn, tilt} (or null), source is "camera" (default) or "file" (a picked or
+// pasted photo: a small face gets the "small" tip, never "move closer"). Never throws: with no face or any other
+// trouble there are just no tips
+export function photoTips(imageData, points478px, angles, source = 'camera') {
   try {
     if (!imageData || !points478px || !points478px.length) return [];
-    return tipLines(measure(imageData, points478px, angles));
+    return tipLines(measure(imageData, points478px, angles, source));
   } catch (e) {
     console.warn('photoTips failed', e);
     return [];

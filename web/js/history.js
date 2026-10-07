@@ -72,8 +72,9 @@ function write(list) {
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
 // Adds one rating: {reference, score, clarity, symmetry, source, pictureId?, now?}. clarity may be null (not counted).
-// The same picture rated again against the same reference is saved once: give the same pictureId for one picture,
-// and without one an identical rating of the same reference within ten minutes counts as the same picture.
+// The same picture rated again against the same reference is saved once: give the same pictureId for one picture
+// (then only the id decides), and without one an identical rating of the same reference within ten minutes counts
+// as the same picture.
 // Returns true if it was added, false if it was a duplicate or not valid.
 export function addRating({ reference, score, clarity = null, symmetry = null, source = '', pictureId, now } = {}) {
   if (!MODELS.includes(reference) || num(score) === null) return false;
@@ -84,8 +85,7 @@ export function addRating({ reference, score, clarity = null, symmetry = null, s
     y: num(symmetry) === null ? null : round3(symmetry), src: String(source || '') };
   const list = read();
   const last = [...list].reverse().find((e) => e.r === reference);
-  if (last && when - last.t >= 0 && when - last.t < DUPLICATE_MS && last.s === entry.s && last.c === entry.c && last.y === entry.y) {
-    if (id) seen.add(id);
+  if (!id && last && when - last.t >= 0 && when - last.t < DUPLICATE_MS && last.s === entry.s && last.c === entry.c && last.y === entry.y) {
     return false;
   }
   if (id) seen.add(id);

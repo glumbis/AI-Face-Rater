@@ -156,7 +156,7 @@ export function makeShareCard({ score, clarity = null, symmetry = null, referenc
 
   // Best, average and day streak
   ctx.fillStyle = t.edge;
-  ctx.fillRect(bx, 1020, bw, 2);
+  ctx.fillRect(bx, 1000, bw, 2);
   const have = stats && stats.count >= 2;
   const streak = stats && stats.streak >= 1 ? String(stats.streak) : '–';
   const cols = [
@@ -169,20 +169,20 @@ export function makeShareCard({ score, clarity = null, symmetry = null, referenc
     ctx.textAlign = 'center';
     ctx.fillStyle = value === '–' ? t.faint : t.text;
     ctx.font = font(600, 84);
-    ctx.fillText(value, x, 1130);
+    ctx.fillText(value, x, 1105);
     ctx.fillStyle = t.muted;
     ctx.font = font(500, 34);
-    ctx.fillText(label, x, 1186);
+    ctx.fillText(label, x, 1160);
   });
 
   // The wordmark
   ctx.font = font(600, 40);
-  const mark = 'AI Face Rater', markW = ctx.measureText(mark).width, ring_r = 17, ringGap = 20;
+  const mark = 'AI Face Rater', markW = ctx.measureText(mark).width, ring_r = 20, ringGap = 20;
   const startX = cx - (markW + ring_r * 2 + ringGap) / 2;
-  ring(ctx, t, startX + ring_r, 1262, ring_r * 0.85);
+  ring(ctx, t, startX + ring_r, 1224, ring_r * 0.85);
   ctx.textAlign = 'left';
   ctx.fillStyle = t.text;
-  ctx.fillText(mark, startX + ring_r * 2 + ringGap, 1276);
+  ctx.fillText(mark, startX + ring_r * 2 + ringGap, 1238);
 
   return toBlob(canvas);
 }

@@ -100,21 +100,46 @@ await test('one half brighter than the other', () => {
   eq(photoTips(img, points478(faceBox), null), [TIPS.uneven]);
 });
 await test('face too big in the picture', () => eq(photoTips(good(), points478([10, 10, 390, 390]), null), [TIPS.close]));
-await test('face too small in the picture', () => eq(photoTips(good(), points478([180, 180, 230, 230]), null), [TIPS.far]));
+await test('camera picture with a small face: "far" (under 0.35 of the shorter side)', () => {
+  eq(photoTips(good(), points478([180, 180, 230, 230]), null), [TIPS.far]);                  // 0.125
+  eq(photoTips(good(), points478([150, 100, 250, 230]), null, 'camera'), [TIPS.far]);        // 130/400 = 0.325
+  eq(photoTips(good(), points478([150, 100, 250, 250]), null, 'camera'), [GREAT]);           // 150/400 = 0.375
+});
+await test('picked photo with a small face: "small", never "move closer"; only under 0.22', () => {
+  eq(photoTips(good(), points478([180, 180, 230, 230]), null, 'file'), [TIPS.small]);        // 0.125
+  eq(photoTips(good(), points478([150, 100, 250, 180]), null, 'file'), [TIPS.small]);        // 80/400 = 0.2
+  eq(photoTips(good(), points478([150, 100, 250, 190]), null, 'file'), [GREAT]);             // 90/400 = 0.225
+  eq(photoTips(good(), points478([150, 100, 250, 230]), null, 'file'), [GREAT]);             // 0.325 is fine for a photo
+  ok(!TIPS.small.toLowerCase().includes('move closer'));
+});
+await test('the face size for "far" is the height over the SHORTER side (portrait picture)', () => {
+  const img = picture(300, 500, noisy(128, 50));
+  eq(photoTips(img, points478([100, 100, 200, 240]), null, 'camera'), [GREAT]);               // 140/300 = 0.47 (140/500 would be 0.28)
+  eq(photoTips(img, points478([100, 100, 200, 190]), null, 'camera'), [TIPS.far]);            // 90/300 = 0.3
+});
+await test('too close is the same for camera and file and comes before small/far', () => {
+  eq(photoTips(good(), points478([10, 10, 390, 390]), null, 'file'), [TIPS.close]);
+  eq(pickTips({ turn: null, tilt: null, sharpness: 100, brightness: 128, imbalance: 0, size: 0.8, share: 0.1, source: 'file' }), ['close']);
+});
 await test('turned head', () => eq(photoTips(good(), points478(faceBox), { turn: -20, tilt: 0 }), [TIPS.turn]));
 await test('tilted head', () => eq(photoTips(good(), points478(faceBox), { turn: 0, tilt: 18 }), [TIPS.tilt]));
 await test('angles as a [turn, tilt] pair work too', () => eq(photoTips(good(), points478(faceBox), [20, 0]), [TIPS.turn]));
-await test('turn and tilt thresholds are exclusive (12 and 15 are fine)', () => eq(photoTips(good(), points478(faceBox), { turn: 12, tilt: -15 }), [GREAT]));
+await test('turn and tilt use the live preview limits (8 and 10 degrees, exclusive)', () => {
+  eq(photoTips(good(), points478(faceBox), { turn: 8, tilt: -10 }), [GREAT]);
+  eq(photoTips(good(), points478(faceBox), { turn: 9, tilt: 0 }), [TIPS.turn]);
+  eq(photoTips(good(), points478(faceBox), { turn: 0, tilt: -11 }), [TIPS.tilt]);
+});
 await test('at most 2 tips, most important first (turn, tilt, then blurry)', () => {
   eq(photoTips(picture(W, H, () => 128), points478(faceBox), { turn: 30, tilt: 30 }), [TIPS.turn, TIPS.tilt]);
   eq(photoTips(picture(W, H, () => 128), points478(faceBox), { turn: 30, tilt: 0 }), [TIPS.turn, TIPS.blurry]);
 });
 await test('priority order of the rest: blurry, dark, uneven, size', () => {
-  const m = { turn: null, tilt: null, sharpness: 1, brightness: 10, imbalance: 0.5, size: 0.9 };
+  const m = { turn: null, tilt: null, sharpness: 1, brightness: 10, imbalance: 0.5, size: 0.9, share: 0.9, source: 'camera' };
   eq(pickTips(m, 8), ['blurry', 'dark', 'uneven', 'close']);
-  eq(pickTips({ ...m, brightness: 250, size: 0.05 }, 8), ['blurry', 'bright', 'uneven', 'far']);
+  eq(pickTips({ ...m, brightness: 250, size: 0.05, share: 0.05 }, 8), ['blurry', 'bright', 'uneven', 'far']);
+  eq(pickTips({ ...m, brightness: 250, size: 0.05, share: 0.05, source: 'file' }, 8), ['blurry', 'bright', 'uneven', 'small']);
   eq(pickTips({ ...m, turn: -50, tilt: 50 }), ['turn', 'tilt']);
-  eq(tipLines({ ...m, sharpness: 100, brightness: 128, imbalance: 0, size: 0.4 }), [GREAT]);
+  eq(tipLines({ ...m, sharpness: 100, brightness: 128, imbalance: 0, size: 0.4, share: 0.4 }), [GREAT]);
 });
 await test('no angles means no turn/tilt tip', () => eq(pickTips({ turn: null, tilt: null, sharpness: 100, brightness: 128, imbalance: 0, size: 0.4 }), []));
 await test('only the SUBSET points make the face box', () => {
@@ -140,9 +165,10 @@ function formula(w) {
   return (x, y) => Math.min(255, Math.max(0, ((x * x * 7 + y * 13 + x * y * 3) % 97) * 2 + 20 + Math.floor(x * 40 / w) - 10));
 }
 const PY = {
-  small: { w: 300, h: 240, box: [60.5, 40.2, 230.7, 200.9], sharpness: 15146.008399925231, brightness: 124.97367647058823, imbalance: 0.09038373963458188, size: 0.6695833333333333 },
-  shrunk: { w: 1500, h: 1200, box: [300.0, 150.5, 1100.3, 1000.9], sharpness: 1336.5058053587545, brightness: 124.3654426125919, imbalance: 0.08601904809854763, size: 0.7086666666666667 },
-  tinyface: { w: 640, h: 480, box: [300.0, 200.0, 360.5, 270.0], sharpness: 2413.1036990933644, brightness: 126.23333333333333, imbalance: 0.010788788713267126, size: 0.14583333333333334 },
+  portrait: { w: 480, h: 640, box: [150.0, 100.0, 330.0, 500.0], sharpness: 13894.355652968625, brightness: 125.71588888888888, imbalance: 0.05992259442145991, size: 0.625, share: 0.8333333333333334 },
+  small: { w: 300, h: 240, box: [60.5, 40.2, 230.7, 200.9], sharpness: 15146.008399925231, brightness: 124.97367647058823, imbalance: 0.09038373963458188, size: 0.6695833333333333, share: 0.6695833333333333 },
+  shrunk: { w: 1500, h: 1200, box: [300.0, 150.5, 1100.3, 1000.9], sharpness: 1336.5058053587545, brightness: 124.3654426125919, imbalance: 0.08601904809854763, size: 0.7086666666666667, share: 0.7086666666666667 },
+  tinyface: { w: 640, h: 480, box: [300.0, 200.0, 360.5, 270.0], sharpness: 2413.1036990933644, brightness: 126.23333333333333, imbalance: 0.010788788713267126, size: 0.14583333333333334, share: 0.14583333333333334 },
 };
 for (const [name, c] of Object.entries(PY)) {
   await test(`measurements match Python (${name}: ${c.w}x${c.h})`, () => {
@@ -150,6 +176,7 @@ for (const [name, c] of Object.entries(PY)) {
     near(m.brightness, c.brightness, 0.2, 'brightness');
     near(m.imbalance, c.imbalance, 0.003, 'imbalance');
     near(m.size, c.size, 1e-6, 'size');
+    near(m.share, c.share, 1e-6, 'share');
     near(m.sharpness / c.sharpness, 1, 0.03, 'sharpness ratio');
     eq([m.turn, m.tilt], [5, -3]);
   });
@@ -196,15 +223,19 @@ await test('best, average, count and trend against the EARLIER average', () => {
   near(s.average, 6.125, 1e-9);
   near(s.diff, -1.5, 1e-9);
 });
-await test('trend threshold is 0.1 (inclusive), like Python', () => {
+await test('trend needs a difference of 0.1 from the earlier average, like Python', () => {
   fresh();
   rate('girl', 5.0, { now: at(15, 9) });
-  rate('girl', 5.1, { now: at(15, 10) });
+  rate('girl', 5.125, { now: at(15, 10) });
   eq(history.stats('girl', NOW).trend, 'up');
   fresh();
   rate('girl', 5.0, { now: at(15, 9) });
-  rate('girl', 5.09, { now: at(15, 10) });
+  rate('girl', 5.06, { now: at(15, 10) });
   eq(history.stats('girl', NOW).trend, null);
+  fresh();
+  rate('girl', 5.0, { now: at(15, 9) });
+  rate('girl', 4.875, { now: at(15, 10) });
+  eq(history.stats('girl', NOW).trend, 'down');
 });
 await test('each reference has its own numbers; the streak counts all of them', () => {
   fresh();
@@ -405,10 +436,8 @@ await test('manifest has the needed fields and its icons exist at the right size
   ok(m.short_name && m.theme_color && m.background_color, 'short_name/theme_color/background_color');
   ok(m.icons.some((i) => i.sizes === '192x192') && m.icons.some((i) => i.sizes === '512x512') && m.icons.some((i) => i.purpose === 'maskable'), 'icon set');
   for (const icon of m.icons) {
-    const img = new Image();
-    img.src = new URL(icon.src, new URL('manifest.webmanifest', base)).href;
-    await img.decode();
-    eq([img.naturalWidth, img.naturalHeight].join('x'), icon.sizes, icon.src);
+    const bmp = await createImageBitmap(await (await fetch(new URL(icon.src, new URL('manifest.webmanifest', base)))).blob());
+    eq([bmp.width, bmp.height].join('x'), icon.sizes, icon.src);
   }
 });
 await test('sw.js parses, has the build placeholder and handles fetch', async () => {
@@ -436,8 +465,8 @@ group('real facedata.js');
   } else {
     // Note: the import map above sends '../js/facedata.js' to the stand-in, so the ?real import is a separate URL
     await test('CONST has every phototips constant tips.js reads', () => {
-      const names = ['MAX_TIPS', 'MEASURE_MAX_SIZE', 'TURN_TIP', 'TILT_TIP', 'SHARPNESS_WIDTH', 'BLURRY_BELOW', 'TOO_DARK_BELOW', 'TOO_BRIGHT_ABOVE', 'UNEVEN_LIGHT_ABOVE', 'TOO_CLOSE_ABOVE', 'TOO_FAR_BELOW'];
-      for (const n of names) ok(Number.isFinite(real.CONST['PHOTOTIPS_' + n] ?? real.CONST[n]), 'CONST.' + n);
+      const names = ['MAX_TIPS', 'MEASURE_MAX_SIZE', 'TURN_TIP', 'TILT_TIP', 'SHARPNESS_WIDTH', 'BLURRY_BELOW', 'TOO_DARK_BELOW', 'TOO_BRIGHT_ABOVE', 'UNEVEN_LIGHT_ABOVE', 'TOO_CLOSE_ABOVE', 'TOO_FAR_BELOW', 'TOO_FAR_BELOW_FILE'];
+      for (const n of names) ok(Number.isFinite(real.CONST['PHOTOTIPS_' + n] ?? real.CONST[n] ?? real.CONST[{ TURN_TIP: 'HINT_TURN', TILT_TIP: 'HINT_TILT', TOO_FAR_BELOW: 'HINT_FACE_SIZE' }[n]]), 'CONST.' + n);
       ok(Array.isArray(real.SUBSET) && real.SUBSET.length > 100, 'SUBSET');
     });
   }
