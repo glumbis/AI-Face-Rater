@@ -8,6 +8,8 @@ __pycache__/
 *.png
 !perBoy.jpg
 !perGirl.jpg
+# Website icons
+!web/icons/*.png
 
 # Created when you rate faces with dataset_rater.py
 ratings.csv
