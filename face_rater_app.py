@@ -699,9 +699,9 @@ class FaceRaterApp:
         self.aboutButton = RoundButton(titleRow, self, "i", self.show_about, False, px(30), px(30))
         self.aboutButton.grid(row=0, column=1, sticky="e")
         self.customWidgets.append(self.aboutButton)
-        self.label(header, "Compare with the model face of a", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
+        self.label(header, "Compare with the model face", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
         self.gender = tk.StringVar(value="boy")
-        self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
+        self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl"), ("Average", "average")],
                                       self.gender_changed, panelW, px(40))
         self.genderToggle.pack()
         self.customWidgets.append(self.genderToggle)
@@ -815,7 +815,7 @@ class FaceRaterApp:
 
     def start(self):
         try:
-            ld.load_predictor()
+            ld.load_landmarker()
         except (FileNotFoundError, RuntimeError) as e:
             # RuntimeError is a damaged model file
             messagebox.showerror("AI Face Rater", str(e))
@@ -861,15 +861,14 @@ class FaceRaterApp:
         self.set_camera_hint(TIP_TEXT)
 
         h, w = frame.shape[:2]
-        found = ld.landmark_detect(frame, detectScale=min(1.0, PREVIEW_DETECT_WIDTH / w))
+        found = ld.detect_face(frame, detectScale=min(1.0, PREVIEW_DETECT_WIDTH / w), live=True)
         if found is None:
             if now - self.lastFaceTime > FACE_LOST_GRACE:
                 self.tracker.reset()
                 self.set_status("No face found. Face the camera!", WARN)
         else:
             self.lastFaceTime = now
-            xList, yList = found
-            angles = hp.head_angles(xList, yList, frame.shape)
+            xList, yList, angles = found
             problem = None
             if angles is not None:
                 # The tip follows the middle of the last few pictures, and Take photo can use any of the recent ones
@@ -882,8 +881,10 @@ class FaceRaterApp:
                 # Only a tip: the button still works
                 self.set_status(hp.HINT_MESSAGES[problem], WARN)
                 color = (40, 160, 245)
+            # 162 dots, so small ones
+            radius = max(1, round(max(h, w) / 400))
             for x, y in zip(xList, yList):
-                cv2.circle(frame, (int(x), int(y)), 2, color, -1)
+                cv2.circle(frame, (round(x), round(y)), radius, color, -1, cv2.LINE_AA)
 
         self.show_picture(frame)
 
@@ -1007,12 +1008,10 @@ class FaceRaterApp:
         # The tip texts for a picture. Never fails: with no face or any other trouble there are just no tips
         try:
             small = phototips.shrink(picture)
-            found = ld.landmark_detect(small)
+            found = ld.detect_face(small)
             if found is None:
                 return []
-            xList, yList = found
-            angles = hp.head_angles(xList, yList, small.shape)
-            return phototips.tip_lines(phototips.measure(small, xList, yList, angles))
+            return phototips.tip_lines(phototips.measure(small, found.xList, found.yList, found.angles))
         except Exception:
             return []
 

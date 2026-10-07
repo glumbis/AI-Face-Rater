@@ -1,10 +1,15 @@
-import dlib
+import mediapipe as mp
+from mediapipe.tasks.python import BaseOptions, vision
 import cv2
 import numpy as np
 import time
 import os
 import sys
+from collections import namedtuple
 
+from facelayout import (BOY_PERFECT_X, BOY_PERFECT_Y, EYE_CORNERS, FACE_WIDTH_POINTS, GIRL_PERFECT_X, GIRL_PERFECT_Y,
+                        LEFT_CHEEK_POINTS, MIRROR_PAIRS, NOSE_BRIDGE_POINTS, POINT_WEIGHTS as _POINT_WEIGHTS,
+                        RIGHT_CHEEK_POINTS, SUBSET)
 from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
 
 # ---------- Put the path to the picture you want to rate here ----------
@@ -13,12 +18,13 @@ IMAGE_TO_RATE = "your_picture.jpg"
 
 # Look for files next to this script, so it works no matter which folder you run it from
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PREDICTOR_PATH = os.path.join(SCRIPT_DIR, "shape_predictor_68_face_landmarks.dat")
+LANDMARKER_PATH = os.path.join(SCRIPT_DIR, "face_landmarker.task")
+LANDMARKER_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 
 # Bigger pictures are shrunk to this many pixels on the longest side before rating, so big photos don't take ages
 MAX_PICTURE_SIZE = 1280
-# When no face is found in a picture smaller than this on its shortest side, it looks again for smaller faces
-UPSAMPLE_BELOW = 400
+# The most faces looked for in one picture (only the biggest is rated)
+MAX_FACES = 4
 
 
 class FaceError(Exception):
@@ -52,56 +58,85 @@ def to_bgr(img):
     return img
 
 
-detector = dlib.get_frontal_face_detector()
+# What finding a face gives: its landmarks as lists of pixel coordinates (the 162 landmarks of facelayout.py, in the
+# picture's own pixels) and which way the head is facing, (turn, tilt) in degrees, or None if that couldn't be worked out
+Detection = namedtuple("Detection", ["xList", "yList", "angles"])
 
-predictor = None
+# The model file is ~4 MB and takes a moment to load, so it's only read once, when first needed. The still-picture
+# landmarker ("image") and the one for the live camera ("video", which follows the face from one picture to the next,
+# so it is steadier and quicker) are separate, each is made when first used
+modelData = None
+landmarkers = {}
+lastVideoTime = 0
 
 
-def load_predictor():
-    # The model file is ~100 MB and takes a moment to load, so it's only loaded once, when first needed
-    global predictor
-    if predictor is None:
-        if not os.path.isfile(PREDICTOR_PATH):
-            raise FileNotFoundError("Missing shape_predictor_68_face_landmarks.dat. Download it from "
-                                    "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, "
-                                    "unzip it, and put it next to the scripts.")
+def load_landmarker(live=False):
+    # Returns the face landmarker for still pictures, or for the live camera (live=True). Raises FileNotFoundError if the
+    # model file is missing and RuntimeError if it is damaged
+    global modelData
+    key = "video" if live else "image"
+    if key in landmarkers:
+        return landmarkers[key]
+    if modelData is None:
+        if not os.path.isfile(LANDMARKER_PATH):
+            raise FileNotFoundError("Missing face_landmarker.task. It should be next to the scripts. Download it from "
+                                    f"{LANDMARKER_URL} and put it there.")
+        # The bytes are given to MediaPipe instead of the path, so folders with long names or letters like æ, ø
+        # and å can't get in the way
         try:
-            predictor = dlib.shape_predictor(PREDICTOR_PATH)
-        except RuntimeError:
-            # dlib's own message ("Error deserializing a floating point number...") doesn't say what to do
-            raise RuntimeError("shape_predictor_68_face_landmarks.dat is damaged or only partly downloaded. "
-                               "Download it again from "
-                               "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, "
-                               "unzip it, and put it next to the scripts.")
-    return predictor
+            with open(LANDMARKER_PATH, "rb") as f:
+                modelData = f.read()
+        except OSError as e:
+            raise RuntimeError(f"Could not read face_landmarker.task: {e.strerror or e}")
+    try:
+        options = vision.FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_buffer=modelData),
+            running_mode=vision.RunningMode.VIDEO if live else vision.RunningMode.IMAGE,
+            num_faces=MAX_FACES, output_face_blendshapes=False, output_facial_transformation_matrixes=True)
+        landmarkers[key] = vision.FaceLandmarker.create_from_options(options)
+    except Exception:
+        # MediaPipe's own message ("Unable to open zip archive" and so on) doesn't say what to do
+        modelData = None
+        raise RuntimeError("face_landmarker.task is damaged or only partly downloaded. "
+                           f"Download it again from {LANDMARKER_URL} and put it next to the scripts.")
+    return landmarkers[key]
 
 
-def landmark_detect(img, detectScale=1.0):
-    # Returns the 68 landmarks of the biggest face as xList, yList, or None if there is no face.
-    # detectScale < 1 looks for the face in a shrunk copy, which is faster (used for the live camera)
-    gray = cv2.cvtColor(to_bgr(img), cv2.COLOR_BGR2GRAY)
-
-    small = gray if detectScale == 1.0 else cv2.resize(gray, None, fx=detectScale, fy=detectScale)
-    faces = detector(small)
-    # The face finder misses faces smaller than about 80 pixels, so if a small picture has no face, look again in a
-    # copy twice as big. That takes about 3 times as long, so only do it when the quick search found nothing
-    if len(faces) == 0 and min(small.shape[:2]) < UPSAMPLE_BELOW:
-        faces = detector(small, 1)
-
-    if len(faces) == 0:
+def detect_face(img, detectScale=1.0, live=False):
+    # Finds the biggest face in img. Returns a Detection (landmarks and head direction), or None if there is no face.
+    # detectScale < 1 looks for the face in a shrunk copy, which is faster. The landmarks are still in the pixels of img.
+    # live=True is for the live camera: the pictures must come one after the other from the same camera
+    global lastVideoTime
+    small = to_bgr(img)
+    h, w = small.shape[:2]
+    if detectScale != 1.0:
+        small = cv2.resize(small, None, fx=detectScale, fy=detectScale, interpolation=cv2.INTER_AREA)
+    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+    landmarker = load_landmarker(live)
+    if live:
+        # The live landmarker needs a time for each picture, and every one later than the one before
+        lastVideoTime = max(lastVideoTime + 1, int(time.monotonic() * 1000))
+        result = landmarker.detect_for_video(image, lastVideoTime)
+    else:
+        result = landmarker.detect(image)
+    if not result.face_landmarks:
         return None
 
+    # (x, y) of the chosen landmarks in the picture's pixels. MediaPipe's numbers are shares of the picture's width
+    # and height, with 0 and 1 at the outer edges of the picture, so the middle of the first pixel is at -0.5
+    faces = [np.array([(p.x * w - 0.5, p.y * h - 0.5) for p in face])[SUBSET] for face in result.face_landmarks]
     # Only rate the biggest face, otherwise the landmark lists get longer than the model face's
-    face = max(faces, key=lambda f: f.width() * f.height())
-    if detectScale != 1.0:
-        face = dlib.rectangle(int(face.left() / detectScale), int(face.top() / detectScale),
-                              int(face.right() / detectScale), int(face.bottom() / detectScale))
+    which = max(range(len(faces)), key=lambda n: np.ptp(faces[n][:, 0]) * np.ptp(faces[n][:, 1]))
+    matrices = result.facial_transformation_matrixes
+    angles = head_angles(matrices[which]) if which < len(matrices) else None
+    return Detection(faces[which][:, 0].tolist(), faces[which][:, 1].tolist(), angles)
 
-    landmarks = load_predictor()(image=gray, box=face)
 
-    xList = [landmarks.part(n).x for n in range(0, 68)]
-    yList = [landmarks.part(n).y for n in range(0, 68)]
-    return xList, yList
+def landmark_detect(img, detectScale=1.0, live=False):
+    # Returns the 162 landmarks of the biggest face as xList, yList, or None if there is no face.
+    # (detect_face gives the head direction too)
+    found = detect_face(img, detectScale, live)
+    return None if found is None else (found.xList, found.yList)
 
 
 # Colours of what is drawn on the rated picture (blue, green, red order, like all OpenCV colours)
@@ -111,8 +146,9 @@ SOFT_RED = (113, 113, 248)  # uneven skin, #F87171
 
 
 def draw_landmarks(img, xList, yList):
-    # Dot size follows the picture size, so the dots are visible on big photos and not huge on small ones
-    radius = max(2, round(max(img.shape[:2]) / 250))
+    # Dot size follows the picture size, so the dots are visible on big photos and not huge on small ones.
+    # There are 162 of them, so they are smaller than the 68 dots of the old layout were
+    radius = max(1, round(max(img.shape[:2]) / 400))
     # Soft mint dots: drawn smooth on a copy, then mixed 75% into the picture so the face still shows through
     dots = img.copy()
     for x, y in zip(xList, yList):
@@ -131,8 +167,8 @@ SKIN_THRESHOLD = 7.0
 # When this share of the cheek squares is inconsistent, skin clarity is 0
 SKIN_WORST_FRACTION = 0.15
 # How much uneven skin lowers the score. It's added to the shape error (see SCORE_K), from 0 at clarity 1 to
-# this at clarity 0, so very uneven skin lowers the score as much as a 0.02 bigger shape error would
-SKIN_PENALTY = 0.02
+# this at clarity 0, so very uneven skin lowers the score as much as a 0.015 bigger shape error would (a quarter off the score)
+SKIN_PENALTY = 0.015
 # A spot darker than this share of the brightness around it, and not more than HAIR_MAX_REDNESS (Lab a*) redder,
 # counts as hair (stubble, beard) and is left out, so beards don't count as uneven skin.
 # The downside is that dark brown spots (like moles) are left out too, only red ones count
@@ -145,7 +181,7 @@ HAIR_MAX_REDNESS = 2.0
 BEARD_DARKER = 0.3
 # If more than this share of a cheek square is hair (a full beard), that cheek isn't judged at all
 HAIR_MAX_COVER = 0.6
-# Cheek square side, as a share of the face width (jaw point 0 to 16)
+# Cheek square side, as a share of the face width (from one side of the face outline to the other)
 CHEEK_SIZE = 0.2
 # Cheek squares are resized to this many pixels per side, so the check behaves the same for any photo size
 CHEEK_SAMPLE = 64
@@ -154,13 +190,13 @@ CHEEK_MIN_VISIBLE = 0.5
 # Skin with less colour than this (average Lab a* and b*, skin is usually 10 to 30) is a black-and-white photo
 MIN_SKIN_COLOUR = 2.0
 
-# The landmarks around each cheek, the middle of them is the middle of the square
-LEFT_CHEEK_POINTS = [1, 3, 31, 41]
-RIGHT_CHEEK_POINTS = [15, 13, 35, 46]
+# The landmarks around each cheek (LEFT_CHEEK_POINTS and RIGHT_CHEEK_POINTS in facelayout.py), the middle of them
+# is the middle of the square
 
 
 def cheek_square(xList, yList, points):
-    side = CHEEK_SIZE * dist(xList[0], yList[0], xList[16], yList[16])
+    left, right = FACE_WIDTH_POINTS
+    side = CHEEK_SIZE * dist(xList[left], yList[left], xList[right], yList[right])
     cX = np.mean([xList[p] for p in points])
     cY = np.mean([yList[p] for p in points])
     return int(cX - side / 2), int(cY - side / 2), int(cX + side / 2), int(cY + side / 2)
@@ -177,10 +213,11 @@ LUMINANCE = np.array([0.0722, 0.7152, 0.2126], np.float32)
 
 
 def nose_skin_brightness(img, xList, yList):
-    # The brightness of the skin on the nose bridge (between landmarks 28 and 29), or None if it's outside the picture.
-    # The median, so a shiny spot or the bridge of a pair of glasses doesn't change it much
-    half = max(1, round(0.1 * dist(xList[36], yList[36], xList[45], yList[45])))
-    cX, cY = round((xList[28] + xList[29]) / 2), round((yList[28] + yList[29]) / 2)
+    # The brightness of the skin on the nose bridge (between the two NOSE_BRIDGE_POINTS), or None if it's outside the
+    # picture. The median, so a shiny spot or the bridge of a pair of glasses doesn't change it much
+    half = max(1, round(0.1 * dist(xList[EYE_CORNERS[0]], yList[EYE_CORNERS[0]], xList[EYE_CORNERS[1]], yList[EYE_CORNERS[1]])))
+    top, bottom = NOSE_BRIDGE_POINTS
+    cX, cY = round((xList[top] + xList[bottom]) / 2), round((yList[top] + yList[bottom]) / 2)
     h, w = img.shape[:2]
     sample = img[max(cY - half, 0):min(cY + half, h), max(cX - half, 0):min(cX + half, w)]
     if sample.size == 0:
@@ -280,57 +317,34 @@ def skin_clarity(img, drawOn, xList, yList):
 
 # ---------- Comparing to the model face ----------
 # The error (shape error plus the skin and symmetry penalties) that lowers the score to 10 * e^-1 (about 3.7).
-# Tuned so rating perGirl.jpg as a boy and perBoy.jpg as a girl (two quite different faces, error about 0.049)
-# gives about 5. Even the same face in another photo has an error of about 0.005 to 0.01 (the landmarks
-# move a little), which costs about 0.5 to 1 point
-SCORE_K = 0.07
+# Tuned so rating perGirl.jpg as a boy and perBoy.jpg as a girl (two quite different faces) gives about 5.
+# Even the same face in another photo has an error of about 0.003 to 0.008 (the landmarks move a little), which
+# costs about half a point to a point
+SCORE_K = 0.054
 
-# How much each landmark counts, both when lining the face up with the model face and when measuring the difference.
-# The jaw line is noisy and moves with hair, beard and head angle, so it counts little. The nose and eyes are
-# found very reliably and are the core of the face's shape, so they count the most. Brows move a bit with
-# expression, so they count a medium amount. The outer lips move a lot when smiling (a small smile would cost
-# about 2 points at 0.6), so they count little. The inner lips mostly show if the mouth is open or smiling,
-# which isn't the face's shape, so they don't count.
-JAW_WEIGHT = 0.3
-BROW_WEIGHT = 0.6
-NOSE_WEIGHT = 1.0
-EYE_WEIGHT = 1.0
-OUTER_LIP_WEIGHT = 0.3
-INNER_LIP_WEIGHT = 0.0
-POINT_WEIGHTS = np.array([JAW_WEIGHT] * 17 + [BROW_WEIGHT] * 10 + [NOSE_WEIGHT] * 9 + [EYE_WEIGHT] * 12
-                         + [OUTER_LIP_WEIGHT] * 12 + [INNER_LIP_WEIGHT] * 8)
+# How much each landmark counts, both when lining the face up with the model face and when measuring the difference
+# (the reasons are in facelayout.py, where the weights of the regions are)
+POINT_WEIGHTS = np.array(_POINT_WEIGHTS)
 
-# For each landmark, the landmark in the same place on the other side of the face (points on the middle line,
-# like the nose tip and chin, are their own partner)
-MIRROR_PAIRS = ([16 - i for i in range(17)]                      # jaw
-                + [26, 25, 24, 23, 22, 21, 20, 19, 18, 17]       # brows
-                + [27, 28, 29, 30, 35, 34, 33, 32, 31]           # nose
-                + [45, 44, 43, 42, 47, 46, 39, 38, 37, 36, 41, 40]  # eyes
-                + [54, 53, 52, 51, 50, 49, 48, 59, 58, 57, 56, 55]  # outer lips
-                + [64, 63, 62, 61, 60, 67, 66, 65])              # inner lips
-# How lopsided a face must be (difference between the two sides, as a share of the eye width) for symmetry 0
-SYMMETRY_WORST = 0.08
-# Like SKIN_PENALTY: added to the shape error, from 0 at symmetry 1 to this at symmetry 0
-SYMMETRY_PENALTY = 0.01
+# MIRROR_PAIRS (facelayout.py) has, for each landmark, the landmark in the same place on the other side of the face
+# (points on the middle line, like the nose tip and chin, are their own partner)
+# How lopsided a face must be (difference between the two sides, as a share of the eye width) for symmetry 0.
+# The two model faces measure about 0.010, and the landmarks wobble less than the old ones did (they were 0.013 to 0.022
+# and the limit was 0.08), so the limit is lower, which keeps the symmetry percentages about as they were
+SYMMETRY_WORST = 0.05
+# Like SKIN_PENALTY: added to the shape error, from 0 at symmetry 1 to this at symmetry 0 (the same share off
+# the score as before, about an eighth)
+SYMMETRY_PENALTY = 0.0075
 
-BOY_PERFECT_X = [44, 49, 57, 62, 73, 97, 128, 162, 200, 239, 268, 293, 315, 324, 328, 332, 334, 61, 77, 103, 129, 154, 210, 238, 263, 289, 308, 186, 187, 187, 188, 164, 177, 191, 205, 218, 95, 112, 132, 149, 131, 111, 225, 240, 259, 276, 261, 242, 138, 157, 177, 194, 211, 230, 250, 231, 213, 195, 178, 157, 146, 178, 195, 212, 241, 211, 194, 177]
-BOY_PERFECT_Y = [248, 291, 334, 375, 414, 448, 476, 498, 502, 493, 467, 438, 404, 366, 325, 284, 242, 243, 226, 223, 227, 234, 231, 224, 220, 222, 236, 265, 292, 318, 346, 362, 365, 368, 363, 359, 269, 262, 262, 271, 275, 275, 269, 260, 260, 265, 271, 271, 407, 399, 395, 398, 394, 394, 400, 416, 425, 428, 428, 422, 408, 407, 407, 404, 402, 405, 408, 408]
-GIRL_PERFECT_X = [123, 124, 130, 139, 154, 179, 207, 241, 280, 318, 351, 379, 402, 418, 428, 434, 437, 141, 167, 197, 224, 251, 317, 343, 370, 399, 424, 280, 280, 280, 279, 254, 266, 279, 292, 304, 171, 191, 216, 233, 210, 186, 328, 347, 372, 391, 374, 350, 217, 239, 261, 277, 293, 317, 339, 319, 296, 279, 260, 238, 229, 261, 278, 294, 327, 295, 278, 261]
-GIRL_PERFECT_Y = [264, 307, 349, 391, 429, 462, 492, 517, 524, 518, 496, 467, 436, 399, 358, 315, 273, 216, 205, 208, 219, 234, 236, 223, 215, 214, 226, 271, 303, 335, 366, 381, 386, 392, 386, 380, 263, 251, 254, 274, 279, 276, 277, 259, 257, 269, 282, 283, 428, 418, 412, 416, 411, 417, 428, 453, 464, 466, 464, 453, 432, 434, 435, 433, 431, 435, 437, 435]
+# The model faces you can compare with. "average" is between the boy and the girl face (see average_face)
+MODEL_FACES = ("boy", "girl", "average")
 
-
-def getPerfs(gender):
-    if gender.lower() == "boy":
-        return BOY_PERFECT_X, BOY_PERFECT_Y
-    elif gender.lower() == "girl":
-        return GIRL_PERFECT_X, GIRL_PERFECT_Y
-    raise ValueError("gender must be 'boy' or 'girl'")
 
 def dist(x1, y1, x2, y2):
     return(np.sqrt((x1-x2)**2+(y1-y2)**2))
 
 def align(points, target, weights=POINT_WEIGHTS):
-    # Moves, turns and resizes points (68 x 2) so they lie as close as possible to target (weighted Umeyama).
+    # Moves, turns and resizes points (162 x 2) so they lie as close as possible to target (weighted Umeyama).
     # Only those three changes are allowed, so the face keeps its own shape and only the differences in shape are left.
     w = weights / weights.sum()
     pointsMid = w @ points
@@ -350,7 +364,29 @@ def weighted_rms(a, b, weights=POINT_WEIGHTS):
 
 def eye_width(points):
     # Distance between the outer eye corners, used as the face's size so errors don't depend on how big the face is
-    return np.linalg.norm(points[45] - points[36])
+    return np.linalg.norm(points[EYE_CORNERS[1]] - points[EYE_CORNERS[0]])
+
+
+def average_face():
+    # The face halfway between the boy and the girl model face: the girl face is moved, turned and resized onto the
+    # boy face (the same alignment as for rating), then the two are averaged landmark by landmark
+    boy = np.column_stack([BOY_PERFECT_X, BOY_PERFECT_Y]).astype(np.float64)
+    girl = np.column_stack([GIRL_PERFECT_X, GIRL_PERFECT_Y]).astype(np.float64)
+    return (boy + align(girl, boy)) / 2
+
+
+AVERAGE_PERFECT_X, AVERAGE_PERFECT_Y = (list(column) for column in average_face().T)
+
+
+def getPerfs(gender):
+    # The model face's landmarks as xList, yList. gender is "boy", "girl" or "average"
+    if gender.lower() == "boy":
+        return BOY_PERFECT_X, BOY_PERFECT_Y
+    elif gender.lower() == "girl":
+        return GIRL_PERFECT_X, GIRL_PERFECT_Y
+    elif gender.lower() == "average":
+        return AVERAGE_PERFECT_X, AVERAGE_PERFECT_Y
+    raise ValueError("gender must be 'boy', 'girl' or 'average'")
 
 def shape_error(xList, yList, gender):
     # How different the face's shape is from the model face, as a share of the model face's eye width (0 = identical)
@@ -378,7 +414,7 @@ def symmetry(xList, yList):
 
 
 def rate_face(img, gender):
-    # Rates the face in img against the boy or girl model face.
+    # Rates the face in img against the boy, girl or average model face (gender is "boy", "girl" or "average").
     # Returns a dict with score (0 to 10), shapeError, clarity (None if the cheeks couldn't be judged), skinPenalty,
     # skinFactor, symmetry, symmetryPenalty, symmetryFactor and picture (a copy with the landmarks and cheek
     # squares drawn on it). Raises FaceError if it can't be rated.
@@ -388,12 +424,12 @@ def rate_face(img, gender):
         shrink = MAX_PICTURE_SIZE / max(h, w)
         img = cv2.resize(img, (round(w * shrink), round(h * shrink)), interpolation=cv2.INTER_AREA)
 
-    found = landmark_detect(img)
+    found = detect_face(img)
     if found is None:
         raise FaceError("No face found. Face the camera with a straight face.")
-    selfieX, selfieY = found
+    selfieX, selfieY = found.xList, found.yList
 
-    problem = facing_problem(selfieX, selfieY, img.shape)
+    problem = facing_problem(found.angles)
     if problem is not None:
         raise FaceError(REFUSED_MESSAGES[problem])
 
@@ -431,13 +467,13 @@ def main():
     print("Take you foto with you face facing the camera, and dont make any grimaces.")
 
     try:
-        load_predictor()
+        load_landmarker()
         selfiePic = read_image(imagePath)
     except (FileNotFoundError, RuntimeError, FaceError) as e:
         sys.exit(str(e))
 
-    gender = input("Are you a boy or a girl? (write boy or girl) Answer here --> ")
-    if gender.lower() not in ("boy", "girl"):
+    gender = input("Compare with the boy, girl or average model face? (write boy, girl or average) Answer here --> ")
+    if gender.lower() not in MODEL_FACES:
         print("Real beauty comes from the mind, therefor you are a fucking 0. Can't even write boy or girl... smh")
         time.sleep(7)
         sys.exit()

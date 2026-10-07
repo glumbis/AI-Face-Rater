@@ -20,9 +20,11 @@ TOO_DARK_BELOW = 70.0
 TOO_BRIGHT_ABOVE = 215.0
 # How much brighter one half of the face is than the other, as a share of the average brightness
 UNEVEN_LIGHT_ABOVE = 0.22
-# Size of the face (from the brows to the chin) as a share of the picture's width or height, whichever is bigger
-TOO_CLOSE_ABOVE = 0.62
-TOO_FAR_BELOW = 0.14
+# Size of the face (from the top of the forehead to the chin) as a share of the picture's width or height, whichever
+# is bigger. (The face outline of the landmarks starts higher than the old landmarks did, at the top of the forehead
+# and not at the brows, which made the box about 20% taller, so these limits are 20% bigger than they were)
+TOO_CLOSE_ABOVE = 0.74
+TOO_FAR_BELOW = 0.17
 
 TIPS = {
     "turn": "Your head is turned a little. Look straight at the lens.",

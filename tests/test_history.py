@@ -76,3 +76,14 @@ def test_streak(tmp_path):
     # Nothing rated yet today: yesterday still counts, a longer gap doesn't
     assert history.streak(entries, today + timedelta(days=1)) == 3
     assert history.streak(entries, today + timedelta(days=2)) == 0
+
+
+def test_each_model_face_has_its_own_history_including_the_average_face(tmp_path):
+    add(tmp_path, "boy", 6.0)
+    add(tmp_path, "average", 7.0)
+    add(tmp_path, "average", 8.0, daysAgo=1)
+    entries = history.load(str(tmp_path))
+    assert sorted(e.model for e in entries) == ["average", "average", "boy"]
+    compare = history.compare(entries, "average", 9.0)
+    assert compare["count"] == 3 and compare["best"] == 9.0 and compare["average"] == 8.0
+    assert history.compare(entries, "girl", 5.0) is None
