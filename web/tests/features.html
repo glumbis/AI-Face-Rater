@@ -342,6 +342,24 @@ await test('default storage (real localStorage) does not throw', () => {
   history.clearHistory();
   eq(history.stats('average', NOW).count, 0);
 });
+await test('series: the latest scores for one model face, oldest first', () => {
+  fresh();
+  eq(history.series('boy'), []);
+  for (let i = 1; i <= 15; i++) rate('boy', i / 2, { now: NOW + i * 1000, pictureId: i });
+  rate('girl', 9, { now: NOW + 99000, pictureId: 'g' });
+  eq(history.series('boy'), [2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5]); // 12 by default
+  eq(history.series('boy', 3), [6.5, 7, 7.5]);
+  eq(history.series('boy', 100).length, 15);
+  eq(history.series('boy', 0), []);
+  eq(history.series('girl'), [9]);
+});
+await test('series: cleared history and a model face without ratings give an empty list', () => {
+  fresh();
+  rate('boy', 5, { now: NOW });
+  eq(history.series('girl'), []);
+  history.clearHistory();
+  eq(history.series('boy'), []);
+});
 history._setStorage(new FakeStorage());
 
 // ---------------------------------------------------------------- share

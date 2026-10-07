@@ -17,4 +17,8 @@ export function stats(reference) {
   while (days.has(d.toDateString())) { streak++; d.setDate(d.getDate() - 1); }
   return { best: Math.max(...scores), average: avg, count: scores.length, trend: diff >= 0.1 ? 'up' : diff <= -0.1 ? 'down' : null, diff, streak };
 }
+export function series(reference, n = 12) {
+  const scores = load().filter((e) => e.reference === reference).map((e) => e.score);
+  return n > 0 ? scores.slice(-n) : [];
+}
 export function clearHistory() { try { localStorage.removeItem(KEY); } catch { /* ignore */ } }

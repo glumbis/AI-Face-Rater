@@ -132,6 +132,12 @@ export function stats(reference, now = Date.now()) {
     count: scores.length, trend, diff, streak };
 }
 
+// The latest n scores for a reference, oldest first (for a small chart). Fewer if there are fewer; [] if none.
+export function series(reference, n = 12) {
+  const scores = read().filter((e) => e.r === reference).map((e) => e.s);
+  return n > 0 ? scores.slice(-n) : [];
+}
+
 // How many ratings are saved (for example to enable a "Clear history" button)
 export function entryCount() {
   return read().length;
