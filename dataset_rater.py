@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import sys
+import time
 
 # Rate a folder of face pictures from 1 to 10 into ratings.csv.
 # Run: python dataset_rater.py [folder]
@@ -23,6 +24,15 @@ HEADER = ["filename", "rating"]
 # Pictures are shrunk or enlarged to fit inside a square of this many pixels, keeping their shape
 BOX_SIZE = 400
 
+# Excel or OneDrive can lock ratings.csv for a moment, so saving tries this many times, this many seconds apart
+SAVE_TRIES = 5
+SAVE_WAIT = 0.1
+
+
+class RatingsFileError(Exception):
+    # ratings.csv has a line we don't understand. We stop instead of guessing, so no rating is ever lost
+    pass
+
 
 # ---------- Plain functions (no window), so they can be tested ----------
 
@@ -32,28 +42,88 @@ def list_images(folder):
     return sorted(f for f in os.listdir(folder) if f.lower().endswith(IMAGE_EXTENSIONS))
 
 
+def read_text(path):
+    # Files from this tool are utf-8, but the old tools wrote Windows' own encoding (cp1252),
+    # so a name like bilde_æøå.jpg isn't valid utf-8 there. utf-8-sig also removes the BOM Excel adds
+    with open(path, "rb") as f:
+        data = f.read()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("cp1252")
+    except UnicodeDecodeError:
+        raise RatingsFileError("ratings.csv isn't a text file (not utf-8 or cp1252).")
+
+
+def is_number(text):
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def parse_ratings(text):
+    # Returns (rows, delimiter). rows is a list of [filename, rating].
+    # Excel with Norwegian settings saves with ; instead of , so look at the first line to see which one is used
+    lines = text.splitlines()
+    firstLine = next((line for line in lines if line.strip()), "")
+    delimiter = ";" if ";" in firstLine else ","
+
+    rows = []
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            cells = next(csv.reader([line], delimiter=delimiter))
+        except csv.Error:
+            cells = []
+
+        # The old tools didn't quote names, so "smith, john.jpg,8" became three cells. The rating is always last
+        if len(cells) >= 2:
+            filename, rating = delimiter.join(cells[:-1]), cells[-1]
+            if not rows and [filename.strip().lower(), rating.strip().lower()] == HEADER:
+                continue  # The header row (files from the old tools don't have one)
+            if is_number(rating):
+                rows.append([filename, rating.strip()])
+                continue
+
+        raise RatingsFileError(f"Line {number} of ratings.csv isn't 'filename{delimiter}rating':\n{line}")
+    return rows, delimiter
+
+
 def load_ratings(path):
-    # Returns a list of [filename, rating] rows. Works with and without the header row,
-    # because ratings.csv files made by the old tools have no header
+    # Returns (rows, delimiter). A missing file is the same as no ratings yet
     if not os.path.isfile(path):
-        return []
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = [row for row in csv.reader(f) if len(row) >= 2]
-    if rows and [cell.strip().lower() for cell in rows[0][:2]] == HEADER:
-        rows = rows[1:]
-    return [[row[0], row[1]] for row in rows]
+        return [], ","
+    return parse_ratings(read_text(path))
 
 
-def save_ratings(path, rows):
+def save_ratings(path, rows, delimiter=","):
     # Writes the whole file every time. It's only a few hundred lines, and it means an old
     # headerless file gets a header, and undo can remove the last line.
-    # Write to a temporary file first, so a crash halfway can't leave a half-written ratings.csv
+    # Write to a temporary file first, so a crash halfway can't leave a half-written ratings.csv.
+    # Raises OSError if the file stays locked, and then ratings.csv is left as it was
     temp = path + ".tmp"
-    with open(temp, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(HEADER)
-        writer.writerows(rows)
-    os.replace(temp, path)
+    try:
+        with open(temp, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f, delimiter=delimiter)
+            writer.writerow(HEADER)
+            writer.writerows(rows)
+        for attempt in range(SAVE_TRIES):
+            try:
+                os.replace(temp, path)
+                return
+            except PermissionError:
+                if attempt == SAVE_TRIES - 1:
+                    raise
+                time.sleep(SAVE_WAIT)
+    except OSError:
+        if os.path.exists(temp):
+            os.remove(temp)
+        raise
 
 
 def next_unrated(images, rows, start=0):
@@ -67,12 +137,11 @@ def next_unrated(images, rows, start=0):
 
 
 def undo_last(images, rows):
-    # Removes the last row and returns the index of its picture, so you can rate it again.
-    # Returns None (and removes nothing) if there is no row, or the picture isn't in this folder
+    # Returns (rows without the last one, index of its picture), so you can rate it again.
+    # Returns (rows, None) if there is no row, or the picture isn't in this folder. rows itself isn't changed
     if not rows or rows[-1][0] not in images:
-        return None
-    filename = rows.pop()[0]
-    return images.index(filename)
+        return rows, None
+    return rows[:-1], images.index(rows[-1][0])
 
 
 def count_rated(images, rows):
@@ -89,10 +158,13 @@ def fit_size(width, height, box):
 def load_last_folder():
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f).get("last_folder")
-    except (OSError, ValueError, AttributeError):
+            settings = json.load(f)
+    except (OSError, ValueError):
         # No settings file yet, or it's broken. Then we just ask for a folder
         return None
+    folder = settings.get("last_folder") if isinstance(settings, dict) else None
+    # Someone may have edited the file by hand, so only accept text
+    return folder if isinstance(folder, str) else None
 
 
 def save_last_folder(folder):
@@ -104,25 +176,31 @@ def save_last_folder(folder):
 
 
 def choose_folder():
-    # The folder on the command line, else the one used last time, else ask
-    if len(sys.argv) > 1:
-        return sys.argv[1]
-    last = load_last_folder()
-    if last and os.path.isdir(last):
-        return last
-    return filedialog.askdirectory(title="Pick the folder with the face pictures")
+    # The folder on the command line, else the one used last time. If that's missing or has
+    # no pictures, ask until we get a folder with pictures. Returns None if you press Cancel
+    folder = sys.argv[1] if len(sys.argv) > 1 else load_last_folder()
+    title = "Pick the folder with the face pictures"
+    while not folder or not list_images(folder):
+        if folder:
+            title = f"No .jpg or .png pictures in {folder}. Pick another folder"
+        folder = filedialog.askdirectory(title=title)
+        if not folder:
+            return None
+    return folder
 
 
 # ---------- The window ----------
 
 class DatasetRater:
-    def __init__(self, root, folder):
+    def __init__(self, root, folder, rows, delimiter):
         self.root = root
         self.root.title("Dataset Rater")
         self.folder = folder
         self.images = list_images(folder)
-        self.rows = load_ratings(RATINGS_FILE)
+        self.rows = rows
+        self.delimiter = delimiter
         self.index = next_unrated(self.images, self.rows)
+        self.broken = False  # True while the picture on screen couldn't be opened
 
         self.progress_label = ttk.Label(root)
         self.progress_label.pack(pady=(8, 0))
@@ -164,6 +242,7 @@ class DatasetRater:
     def show_picture(self):
         self.progress_label.config(text=f"{count_rated(self.images, self.rows)} / {len(self.images)}")
         self.canvas.delete("all")
+        self.broken = False
 
         if self.index >= len(self.images):
             # Don't close the window, so the last rating can still be undone
@@ -181,6 +260,8 @@ class DatasetRater:
                 image = image.convert("RGB")
                 image = image.resize(fit_size(image.width, image.height, BOX_SIZE), Image.Resampling.LANCZOS)
         except OSError:
+            # You can't rate what you can't see, so only skipping works on this one
+            self.broken = True
             self.canvas.create_text(BOX_SIZE / 2, BOX_SIZE / 2, text="Could not open this picture.\nPress S to skip it.")
             return
 
@@ -188,13 +269,22 @@ class DatasetRater:
         self.photo = ImageTk.PhotoImage(image)
         self.canvas.create_image(BOX_SIZE / 2, BOX_SIZE / 2, anchor="center", image=self.photo)
 
+    def save(self, rows):
+        # Only change self.rows after the file is saved, so the window and ratings.csv always agree
+        try:
+            save_ratings(RATINGS_FILE, rows, self.delimiter)
+        except OSError:
+            messagebox.showerror("Dataset Rater", "ratings.csv is locked, close Excel and try again.")
+            return False
+        self.rows = rows
+        return True
+
     def rate(self, rating):
-        if self.index >= len(self.images):
+        if self.index >= len(self.images) or self.broken:
             return
-        self.rows.append([self.images[self.index], rating])
-        save_ratings(RATINGS_FILE, self.rows)
-        self.index = next_unrated(self.images, self.rows, self.index + 1)
-        self.show_picture()
+        if self.save(self.rows + [[self.images[self.index], rating]]):
+            self.index = next_unrated(self.images, self.rows, self.index + 1)
+            self.show_picture()
 
     def submit_slider(self):
         self.rate(round(self.scale.get()))
@@ -206,30 +296,34 @@ class DatasetRater:
         self.show_picture()
 
     def undo(self):
-        index = undo_last(self.images, self.rows)
+        rows, index = undo_last(self.images, self.rows)
         if index is None:
             self.root.bell()
             return
-        save_ratings(RATINGS_FILE, self.rows)
-        self.index = index
-        self.show_picture()
+        if self.save(rows):
+            self.index = index
+            self.show_picture()
 
 
 def main():
     root = tk.Tk()
     root.withdraw()  # Hidden until we know there is something to show
 
+    try:
+        rows, delimiter = load_ratings(RATINGS_FILE)
+    except RatingsFileError as e:
+        # Saving would mean leaving out the line we don't understand, so don't start at all
+        messagebox.showerror("Dataset Rater", f"{e}\n\nFix or remove that line in\n{RATINGS_FILE}\nand start again.")
+        root.destroy()
+        return
+
     folder = choose_folder()
     if not folder:
         root.destroy()
         return
-    if not list_images(folder):
-        messagebox.showerror("Dataset Rater", f"No .jpg or .png pictures found in\n{folder}")
-        root.destroy()
-        return
     save_last_folder(os.path.abspath(folder))
 
-    DatasetRater(root, folder)
+    DatasetRater(root, folder, rows, delimiter)
     root.deiconify()
     root.mainloop()
 
