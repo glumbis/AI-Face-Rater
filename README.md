@@ -1,6 +1,8 @@
 # AI Face Rater
 
-Old, unfinished experiments with face landmark detection (MediaPipe Face Landmarker + OpenCV) and a tool for rating a face dataset.
+Rates a face by comparing its landmarks (MediaPipe Face Landmarker) with a model face.
+
+**Try it in the browser, no install: https://glumbis.github.io/AI-Face-Rater/**. Everything runs on your device and no photo is uploaded. The website is in `web/` (see `web/FEATURES.md`) and deploys to GitHub Pages on every push to main.
 
 - `face_rater_app.py` is the app: double-click `Face Rater.bat` (or run `python face_rater_app.py`).
   - The camera picture is on the left, with a small status line under it that tells you if your face is OK. If your head is turned or tilted a little (over 8 / 10 degrees) or your face is a bit small in the picture it gives a short tip ("Turn a little towards the camera.", "Move a little closer.") but never stops you. The tip follows the middle of the last few pictures and only goes when you're clearly back, so it doesn't flicker.
