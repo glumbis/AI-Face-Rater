@@ -3,9 +3,19 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import os
+import sys
 
 # ---------- Put the path to the picture you want to rate here ----------
 IMAGE_TO_RATE = "your_picture.jpg"
+
+# Look for files next to this script, so it works no matter which folder you run it from
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PREDICTOR_PATH = os.path.join(SCRIPT_DIR, "shape_predictor_68_face_landmarks.dat")
+
+# The picture can also be given on the command line: python landmarkdetect.py picture.jpg
+if len(sys.argv) > 1:
+    IMAGE_TO_RATE = sys.argv[1]
 
 print("Take you foto with you face facing the camera, and dont make any grimaces.")
 
@@ -14,6 +24,9 @@ def take_selfie():
 
     while True:
         ret, frame = cap.read()
+        if not ret:
+            cap.release()
+            sys.exit("Could not read from the camera.")
         cv2.imshow("Selfie", frame)
 
         key = cv2.waitKey(1) & 0xFF
@@ -26,8 +39,21 @@ def take_selfie():
 
             return selfieFrame
 
+def read_image(path):
+    # cv2.imread can't open paths with letters like æ, ø and å on Windows, so read the bytes ourselves
+    if not os.path.isfile(path):
+        sys.exit(f"Could not find the picture '{path}'. Set IMAGE_TO_RATE at the top of landmarkdetect.py.")
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        sys.exit(f"Could not open '{path}' as a picture.")
+    return img
+
+if not os.path.isfile(PREDICTOR_PATH):
+    sys.exit("Missing shape_predictor_68_face_landmarks.dat. Download it from "
+             "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, unzip it, and put it next to this script.")
+
 #selfiePic = take_selfie()
-selfiePic = cv2.imread(IMAGE_TO_RATE)
+selfiePic = read_image(IMAGE_TO_RATE)
 
 #punkter for aligning
 i1 = 27
@@ -35,7 +61,7 @@ i2 = 8
 
 detector = dlib.get_frontal_face_detector()
 
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+predictor = dlib.shape_predictor(PREDICTOR_PATH)
 
 
 def landmark_detect(filename):
@@ -51,8 +77,11 @@ def landmark_detect(filename):
     if len(faces) == 0:
         print("No face detected. Please take you foto with you face forward, and have a straight face.")
         time.sleep(7)
-        quit()
-    
+        sys.exit()
+
+    # Only rate the biggest face, otherwise the landmark lists get longer than the model face's
+    faces = [max(faces, key=lambda f: f.width() * f.height())]
+
     for face in faces:
         x1 = face.left()
         y1 = face.top()
@@ -86,9 +115,8 @@ def getPerfs():
     else:
         print("Real beauty comes from the mind, therefor you are a fucking 0. Can't even write boy or girl... smh")
         time.sleep(7)
-        quit()
+        sys.exit()
 
-    
     return perfectX, perfectY
 
 def dist(x1, y1, x2, y2):
@@ -161,7 +189,8 @@ def giveScore(selfieX, selfieY, perfectX, perfectY):
     for i in range(len(selfieX)):
         score += dist(selfieX[i], selfieY[i], perfectX[i], perfectY[i])**2
     
-    score = (1/np.sqrt(score))*100000
+    # A distance of 0 (rating one of the model faces itself) would divide by zero
+    score = (1/max(np.sqrt(score), 1e-3))*100000
     return score
 
 
@@ -169,9 +198,12 @@ perfectX, perfectY = getPerfs()
 
 changePoints(selfieX, selfieY, perfectX, perfectY)
 
+score = giveScore(selfieX, selfieY, perfectX, perfectY)
+
 print()
-print(f"Your beauty score is {round(giveScore(selfieX, selfieY, perfectX, perfectY),1)}!")
-for i in range(round(giveScore(selfieX, selfieY, perfectX, perfectY))):
+print(f"Your beauty score is {round(score,1)}!")
+# Count up to the score, but don't count forever on a huge score
+for i in range(min(round(score), 2000)):
     print(i)
     time.sleep(0.01)
 #plt.plot(perfectX, perfectY)
@@ -186,6 +218,11 @@ for i in range(round(giveScore(selfieX, selfieY, perfectX, perfectY))):
 #plt.show()
 
 
+# Show the picture with the landmarks drawn on it, scaled down to fit the screen
+h, w = selfiePic.shape[:2]
+shrink = min(1.0, 900 / max(h, w))
+cv2.imshow("Face", cv2.resize(selfiePic, (int(w * shrink), int(h * shrink))))
+print("Press any key in the picture window to close it.")
 cv2.waitKey(delay=0)
 
 cv2.destroyAllWindows()
