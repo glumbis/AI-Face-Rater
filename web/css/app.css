@@ -295,7 +295,8 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
 
 .legend {
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   margin: 2px 0 0;
   padding: 0;
   list-style: none;
@@ -304,10 +305,8 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
   visibility: hidden;
 }
 .legend.on { visibility: visible; }
-.legend li { display: flex; align-items: center; gap: 7px; }
-.swatch { width: 9px; height: 9px; border-radius: 50%; }
-.swatch.mint { background: var(--mint); }
-.swatch.red { background: var(--red); }
+.legend li { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.swatch { width: 22px; height: 14px; flex: none; }  /* little dark chips: the lines on the picture are white */
 
 /* Hint, buttons */
 .bottom { margin-top: auto; padding-top: 20px; display: grid; gap: 10px; }
