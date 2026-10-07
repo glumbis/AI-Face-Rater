@@ -19,12 +19,12 @@ A static website that does the same as the desktop app, entirely in the browser.
 6. **Photo tips.** At most two tips, about the photo and setup only (angle, blur, light, distance). There are the same rules as `phototips.py`.
 7. **Local history** (localStorage, numbers only)
    - "Your best · Average (n photos)".
-   - A ▲/▼ arrow with the difference "since last photo" (your previous photo for the same reference, none on the first).
+   - A ▲/▼ arrow with the difference "since last photo" (your previous photo for the same reference, none on the first). It compares the scores as shown, with one decimal, like `history.compare`.
    - The day streak.
    - A tiny sparkline of the last 12 scores for that model face (from 3 ratings on), with a text summary for screen readers.
-   - A small "New personal best!" badge when the score beats your earlier best for that model face (never on the first photo).
+   - A small "New personal best!" badge when the score, as shown, beats your earlier best for that model face (never on the first photo).
    - Clear history.
-8. **About ("i") panel** with a short "How it works" paragraph (landmarks compared with the model faces, a fun comparison and not a real measure of beauty) and "Photos are processed on this device and never uploaded.", plus Clear history. Before the first photo, a caption under the score says what to do and that nothing leaves the device.
+8. **About ("i") panel** with a short "How it works" paragraph (landmarks compared with the model faces, a fun comparison and not a real measure of beauty) and "Photos are processed on this device and never uploaded.", plus Clear history. In camera mode, while the camera is on, a caption under the score says what to do and that nothing leaves the device.
 9. **Share card.** A PNG with the score, the stats and the reference, and **no photo**. Use the Web Share API, falling back to a download.
 10. **Look and feel**
     - Follows the system light/dark setting.
@@ -55,7 +55,7 @@ Later (not v1): an explanation view (which regions differ from the reference), d
 | `js/scoring.js` | scoring agent | `rateFace(imageData, points478px, matrix, reference)` → `{score, clarity, symmetry, shapeError, skinPenalty, symmetryPenalty, cheeks:[{x1,y1,x2,y2,w,h,mask:Uint8Array}]}`, or throws `FaceError(message)`. Also `shapeError(points, reference)`, `symmetry(points)`, `align(points, target, weights)` |
 | `js/headpose.js` | scoring agent | `headAngles(matrix)` → `{turn, tilt}`; `facingProblem(angles)` → `null \| "side" \| "up" \| "down"`; `class HeadTracker` (`add(angles)`, `.hint` → `null` or kind); `class RecentFrames` (`add(frameCanvas, angles, sharpness)`, `best()`, `reset()`); `sharpness(imageData)` |
 | `js/tips.js` | features agent | `photoTips(imageData, points478px, angles)` → `string[]` (at most 2, or the single "great setup" line) |
-| `js/history.js` | features agent | `addRating({reference, score, clarity, symmetry, source})`, `stats(reference)` → `{best, average, count, trend, diff, streak}` (`trend` is `"up"`, `"down"` or `null` and `diff` is the score minus the previous photo's, both against the previous photo), `series(reference, n = 12)` → the latest `n` scores for that model face, oldest first (`[]` if none), `clearHistory()` |
+| `js/history.js` | features agent | `addRating({reference, score, clarity, symmetry, source})`, `stats(reference)` → `{best, average, count, trend, diff, streak}` (`trend` is `"up"`, `"down"` or `null` and `diff` is the score minus the previous photo's, both from the scores rounded to one decimal as shown), `series(reference, n = 12)` → the latest `n` scores for that model face, oldest first (`[]` if none), `clearHistory()` |
 | `js/share.js` | features agent | `makeShareCard({score, clarity, symmetry, reference, stats, theme})` → `Promise<Blob>`, `shareOrDownload(blob)` |
 | `sw.js`, `manifest.webmanifest`, icons | features agent | offline caching and install |
 | `index.html`, `css/app.css`, `js/app.js`, `js/landmarker.js`, `js/overlay.js` | UI agent | the page, MediaPipe setup (`createLandmarker(mode)`, `detect(source, ts)` → `{points478px, matrix}` for the largest face, or `null`), camera, states, drawing, wiring of all modules |

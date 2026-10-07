@@ -86,11 +86,12 @@ def compare(entries, model, score):
     # How a new score looks next to the earlier ones for the same model face. entries are the ratings from before
     # this one, oldest first. Returns None when there is nothing to compare with, otherwise a dict with best and
     # average (both including the new score), count (including it), trend ("up", "down" or None) and diff (the new
-    # score minus the previous photo's score, the last earlier rating for this model face)
+    # score minus the previous photo's score, the last earlier rating for this model face). Scores are shown with one
+    # decimal, so diff is worked out from the shown numbers: 7.04 -> 7.16 shows 7.0 -> 7.2, a difference of 0.2
     earlier = [e.score for e in entries if e.model == model]
     if not earlier:
         return None
-    diff = score - earlier[-1]
+    diff = round(round(score, 1) - round(earlier[-1], 1), 1)
     trend = "up" if diff >= TREND_MIN_DIFF else "down" if diff <= -TREND_MIN_DIFF else None
     allScores = earlier + [score]
     return {"best": max(allScores), "average": sum(allScores) / len(allScores), "count": len(allScores),

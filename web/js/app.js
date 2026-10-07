@@ -240,7 +240,7 @@ function showExtras(scores, newBest) {
 function showHistory(st, scores = []) {
   // A new best: the latest score is higher (as shown) than every earlier one for this model face
   const prev = scores.slice(0, -1);
-  const newBest = prev.length > 0 && Math.round(scores[scores.length - 1] * 10) > Math.round(Math.max(...prev) * 10);
+  const newBest = prev.length > 0 && Number(fmt(scores[scores.length - 1])) > Number(fmt(Math.max(...prev)));
   showExtras(scores.slice(-SPARK_POINTS), newBest);
   if (st && st.count >= 2 && st.best != null) {
     el.historyLine.textContent = `Your best: ${fmt(st.best)}  ·  Average: ${fmt(st.average)} (${st.count} photos)`;
@@ -313,6 +313,8 @@ function showError(e, id) {
   el.picture.setAttribute('aria-label', PICTURE_LABEL);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
+  // Nothing was saved, so no arrow, best line, sparkline or badge from an earlier rating of this picture
+  showHistory(null);
 }
 
 // Rates a new picture (a canvas) from the camera or a file
