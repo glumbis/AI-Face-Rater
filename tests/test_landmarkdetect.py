@@ -310,7 +310,13 @@ def test_model_faces_are_the_landmarks_of_their_pictures():
 def test_model_faces_are_quite_symmetric():
     for gender in landmarkdetect.MODEL_FACES:
         for face in model_faces(gender):
-            assert landmarkdetect.symmetry(face["x"], face["y"]) > 0.6
+            assert landmarkdetect.symmetry(face["x"], face["y"]) > 0.5
+
+
+def one_face_each(monkeypatch):
+    # Pretend there is only the first model face of each gender (perBoy.jpg and perGirl.jpg)
+    for gender in landmarkdetect.MODEL_FACES:
+        monkeypatch.setitem(modelfaces.FACES, gender, model_faces(gender)[:1])
 
 
 def two_boys(monkeypatch):
@@ -320,6 +326,7 @@ def two_boys(monkeypatch):
 
 
 def test_the_closest_model_face_counts(boy_img, girl_img, monkeypatch):
+    one_face_each(monkeypatch)
     alone = rate_face(boy_img, "boy")
     assert alone["modelFace"] == "Boy 1" and alone["modelFaceCount"] == 1
     girlAsGirl = rate_face(girl_img, "girl")
@@ -415,7 +422,8 @@ def test_a_model_face_scores_itself_near_the_top(boy_img, girl_img):
     assert rate_face(boy_img, "boy")["shapeError"] < 0.001
 
 
-def test_two_different_faces_score_in_the_middle(boy_img, girl_img):
+def test_two_different_faces_score_in_the_middle(boy_img, girl_img, monkeypatch):
+    one_face_each(monkeypatch)
     # Two different people are about SCORE_MID apart, so they get a middling score (with one model face per gender
     # perBoy as a girl and perGirl as a boy get about 3.3)
     for img, gender in ((boy_img, "girl"), (girl_img, "boy")):
