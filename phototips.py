@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 
+from headpose import HINT_TILT, HINT_TURN
+from landmarkdetect import HINT_FACE_SIZE, MIN_FACE_SIZE_FILE
+
 # Rule-based tips about the photo and the setup (never about the face or body). Everything here is a pure function of
 # a picture and the face landmarks, so it is easy to test. The thresholds are the constants below.
 
@@ -9,9 +12,11 @@ MAX_TIPS = 2
 # Pictures bigger than this (on the long side) are shrunk before they are measured
 MEASURE_MAX_SIZE = 960
 
-# Head direction in degrees (turn to the side, tilt up or down). A head turned 10 degrees already loses a little score
-TURN_TIP = 12
-TILT_TIP = 15
+# Head direction in degrees (turn to the side, tilt up or down). The same limits as the live preview's tip (a picture
+# with the head turned more than MAX_TURN / MAX_TILT is refused and never gets here), and a head turned 10 degrees
+# already loses a little score
+TURN_TIP = HINT_TURN
+TILT_TIP = HINT_TILT
 # Sharpness: variance of the Laplacian of the face, on a copy of the face this wide. Lower than this is blurry
 SHARPNESS_WIDTH = 128
 BLURRY_BELOW = 25.0
@@ -20,11 +25,17 @@ TOO_DARK_BELOW = 70.0
 TOO_BRIGHT_ABOVE = 215.0
 # How much brighter one half of the face is than the other, as a share of the average brightness
 UNEVEN_LIGHT_ABOVE = 0.22
-# Size of the face (from the top of the forehead to the chin) as a share of the picture's width or height, whichever
-# is bigger. (The face outline of the landmarks starts higher than the old landmarks did, at the top of the forehead
-# and not at the brows, which made the box about 20% taller, so these limits are 20% bigger than they were)
+# Too close: the size of the face (from the top of the forehead to the chin) as a share of the picture's width or height,
+# whichever is bigger. (The face outline of the landmarks starts higher than the old landmarks did, at the top of the
+# forehead and not at the brows, which made the box about 20% taller, so this limit is 20% bigger than it was)
 TOO_CLOSE_ABOVE = 0.74
-TOO_FAR_BELOW = 0.17
+# Too far: the face height as a share of the picture's shorter side, the same measure as the limits for rating in
+# landmarkdetect.py (face_size). A webcam picture smaller than MIN_FACE_SIZE is refused, and the live preview says
+# "Move a little closer." under HINT_FACE_SIZE, so the tip comes at the same size. A picked photo may be smaller
+# (MIN_FACE_SIZE_FILE), so its tip comes a bit above the lowest size that is rated
+TOO_FAR_BELOW = HINT_FACE_SIZE
+TOO_FAR_BELOW_FILE = 0.22
+assert TOO_FAR_BELOW_FILE > MIN_FACE_SIZE_FILE
 
 TIPS = {
     "turn": "Your head is turned a little. Look straight at the lens.",
@@ -35,6 +46,7 @@ TIPS = {
     "uneven": "One side of your face is brighter. Face a window or lamp.",
     "close": "Step back a little. Very close photos distort faces.",
     "far": "Your face is small in the picture. Move a bit closer.",
+    "small": "Your face is small in the photo. A closer photo rates better.",
 }
 GREAT = "Great setup: straight, sharp and evenly lit."
 
@@ -102,13 +114,21 @@ def face_size(box, shape):
     return float(max((right - left) / w, (bottom - top) / h))
 
 
-def measure(picture, xList, yList, angles=None):
-    # Everything the tips look at. angles is (turn, tilt) in degrees if known
+def face_share(box, shape):
+    # The face height as a share of the picture's shorter side (the measure of landmarkdetect.face_size, which is the
+    # height of the landmarks' box as the box goes from the top of the forehead to the chin)
+    return float((box[3] - box[1]) / min(shape[:2]))
+
+
+def measure(picture, xList, yList, angles=None, source="camera"):
+    # Everything the tips look at. angles is (turn, tilt) in degrees if known. source is "camera" or "file" (a picked
+    # photo, where a smaller face is fine)
     gray = to_gray(picture)
     box = face_box(xList, yList)
     return {"turn": None if angles is None else angles[0], "tilt": None if angles is None else angles[1],
             "sharpness": sharpness(gray, box), "brightness": brightness(gray, box),
-            "imbalance": light_imbalance(gray, box), "size": face_size(box, gray.shape)}
+            "imbalance": light_imbalance(gray, box), "size": face_size(box, gray.shape),
+            "share": face_share(box, gray.shape), "source": source}
 
 
 def pick_tips(m, maxTips=MAX_TIPS):
@@ -129,7 +149,9 @@ def pick_tips(m, maxTips=MAX_TIPS):
         found.append("uneven")
     if m["size"] > TOO_CLOSE_ABOVE:
         found.append("close")
-    elif m["size"] < TOO_FAR_BELOW:
+    elif m.get("source") == "file" and m.get("share", 1.0) < TOO_FAR_BELOW_FILE:
+        found.append("small")
+    elif m.get("source") != "file" and m.get("share", 1.0) < TOO_FAR_BELOW:
         found.append("far")
     return found[:maxTips]
 
