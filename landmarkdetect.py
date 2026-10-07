@@ -110,8 +110,10 @@ def draw_landmarks(img, xList, yList):
 
 
 # ---------- Head direction ----------
-# How many degrees the head may be turned to the side, or tilted up or down, and still count as facing the camera
-MAX_TURN = 20
+# How many degrees the head may be turned to the side, or tilted up or down, and still count as facing the camera.
+# Turning to the side changes the face's shape in the photo a lot (10 degrees costs about 2 points and makes the
+# face look lopsided), so the limit for that is tighter
+MAX_TURN = 12
 MAX_TILT = 20
 
 # Where some landmarks are on an average head in 3D (nose tip at 0, y up, z towards the camera),
@@ -172,13 +174,19 @@ def facing_problem(xList, yList, imgShape):
 SKIN_THRESHOLD = 7.0
 # When this share of the cheek squares is inconsistent, skin clarity is 0
 SKIN_WORST_FRACTION = 0.15
-# How much skin clarity can change the score: 0.2 means from -20% (clarity 0) to +20% (clarity 1)
-SKIN_WEIGHT = 0.2
+# How much uneven skin lowers the score. It's added to the shape error (see SCORE_K), from 0 at clarity 1 to
+# this at clarity 0, so very uneven skin lowers the score as much as a 0.02 bigger shape error would
+SKIN_PENALTY = 0.02
 # A spot darker than this share of the brightness around it, and not more than HAIR_MAX_REDNESS (Lab a*) redder,
 # counts as hair (stubble, beard) and is left out, so beards don't count as uneven skin.
 # The downside is that dark brown spots (like moles) are left out too, only red ones count
 HAIR_DARKER = 0.8
 HAIR_MAX_REDNESS = 2.0
+# A full beard makes the whole cheek dark, so it isn't darker than its surroundings. It is much darker than the
+# skin on the nose bridge though (which beards don't cover), so a spot darker than this share of the nose
+# bridge counts as hair too. Cheeks are often about half as bright as the nose bridge, and deep side shadow
+# can reach this too, but then those spots are just left out
+BEARD_DARKER = 0.3
 # If more than this share of a cheek square is hair (a full beard), that cheek isn't judged at all
 HAIR_MAX_COVER = 0.6
 # Cheek square side, as a share of the face width (jaw point 0 to 16)
@@ -202,7 +210,29 @@ def cheek_square(xList, yList, points):
     return int(cX - side / 2), int(cY - side / 2), int(cX + side / 2), int(cY + side / 2)
 
 
-def cheek_inconsistencies(img, square):
+def to_linear(bgr):
+    # Linear light, where a shadow multiplies all three colour channels by the same number
+    srgb = bgr.astype(np.float32) / 255
+    return np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+# How bright each colour channel looks to a person (B, G, R), to turn a colour into one brightness
+LUMINANCE = np.array([0.0722, 0.7152, 0.2126], np.float32)
+
+
+def nose_skin_brightness(img, xList, yList):
+    # The brightness of the skin on the nose bridge (between landmarks 28 and 29), or None if it's outside the picture.
+    # The median, so a shiny spot or the bridge of a pair of glasses doesn't change it much
+    half = max(1, round(0.1 * dist(xList[36], yList[36], xList[45], yList[45])))
+    cX, cY = round((xList[28] + xList[29]) / 2), round((yList[28] + yList[29]) / 2)
+    h, w = img.shape[:2]
+    sample = img[max(cY - half, 0):min(cY + half, h), max(cX - half, 0):min(cX + half, w)]
+    if sample.size == 0:
+        return None
+    return float(np.median(to_linear(sample) @ LUMINANCE))
+
+
+def cheek_inconsistencies(img, square, noseBrightness=None):
     # Returns the share of the square's skin that is inconsistent, and a mask of where (in the square's own size).
     # Returns None, None if the square is too small, mostly outside the picture, grayscale or mostly covered by beard
     x1, y1, x2, y2 = square
@@ -221,17 +251,14 @@ def cheek_inconsistencies(img, square):
     px1, py1, px2, py2 = max(x1 - margin, 0), max(y1 - margin, 0), min(x2 + margin, w), min(y2 + margin, h)
     scale = CHEEK_SAMPLE / side
     size = (round((px2 - px1) * scale), round((py2 - py1) * scale))
-    patch = cv2.resize(img[py1:py2, px1:px2], size, interpolation=cv2.INTER_AREA)
-    # Linear light, where a shadow multiplies all three colour channels by the same number
-    srgb = patch.astype(np.float32) / 255
-    linear = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    linear = to_linear(cv2.resize(img[py1:py2, px1:px2], size, interpolation=cv2.INTER_AREA))
 
     # A light blur removes camera noise, a heavy blur gives the skin colour around each spot.
     # Comparing to the surroundings instead of one average colour means light changing across the cheek doesn't count.
     detail = cv2.GaussianBlur(linear, (0, 0), 1)
     surroundings = cv2.GaussianBlur(linear, (0, 0), CHEEK_SAMPLE / 8)
-    luminance = np.array([0.0722, 0.7152, 0.2126], np.float32)  # B, G, R
-    detailLum = detail @ luminance
+    detailLum = detail @ LUMINANCE
+    surroundingsLum = surroundings @ LUMINANCE
     surroundingsLab = cv2.cvtColor(surroundings, cv2.COLOR_LBGR2Lab)
 
     # Only the tint is compared, so a black-and-white photo would always look perfectly clear. Skin always has
@@ -242,11 +269,14 @@ def cheek_inconsistencies(img, square):
     # Stubble and beard hairs are much darker than the skin around them, but not redder (a* in Lab is how red
     # a colour is). Redness and pimples are redder, so they still count. Hair isn't uneven skin, so leave it out
     redness = cv2.cvtColor(detail, cv2.COLOR_LBGR2Lab)[..., 1] - surroundingsLab[..., 1]
-    hair = (detailLum < HAIR_DARKER * (surroundings @ luminance)) & (redness < HAIR_MAX_REDNESS)
+    hair = (detailLum < HAIR_DARKER * surroundingsLum) & (redness < HAIR_MAX_REDNESS)
+    if noseBrightness is not None:
+        # Compared to the beard around it, a lighter hair can look redder, so here only the darkness counts
+        hair |= detailLum < BEARD_DARKER * noseBrightness
 
     # Give each spot the same brightness as its surroundings, so a shadow (same skin, just darker) looks
     # identical to the skin around it and only a different tint (redness, spots) counts
-    relit = detail * ((surroundings @ luminance) / np.maximum(detailLum, 1e-4))[..., None]
+    relit = detail * (surroundingsLum / np.maximum(detailLum, 1e-4))[..., None]
 
     # Lab, so the distance between two colours is Delta E (how different they look to a person)
     deltaE = np.linalg.norm(cv2.cvtColor(relit, cv2.COLOR_LBGR2Lab) - surroundingsLab, axis=2)
@@ -268,9 +298,10 @@ def cheek_inconsistencies(img, square):
 def skin_clarity(img, drawOn, xList, yList):
     # Returns 0 (very uneven cheeks) to 1 (clear cheeks), and draws the squares and inconsistent spots on drawOn
     fractions = []
+    noseBrightness = nose_skin_brightness(img, xList, yList)
     for points in (LEFT_CHEEK_POINTS, RIGHT_CHEEK_POINTS):
         square = cheek_square(xList, yList, points)
-        fraction, mask = cheek_inconsistencies(img, square)
+        fraction, mask = cheek_inconsistencies(img, square, noseBrightness)
         if fraction is None:
             continue
         fractions.append(fraction)
@@ -286,21 +317,23 @@ def skin_clarity(img, drawOn, xList, yList):
 
 
 # ---------- Comparing to the model face ----------
-# The shape error that lowers the score to 10 * e^-1 (about 3.7), before skin and symmetry are counted.
-# Tuned so rating perGirl.jpg as a boy and perBoy.jpg as a girl (two quite different faces, shape error
-# about 0.045) gives about 4.5 from the shape, and about 5.5 after their clear skin and symmetry are counted
-SCORE_K = 0.057
+# The error (shape error plus the skin and symmetry penalties) that lowers the score to 10 * e^-1 (about 3.7).
+# Tuned so rating perGirl.jpg as a boy and perBoy.jpg as a girl (two quite different faces, error about 0.049)
+# gives about 5. Even the same face in another photo has an error of about 0.005 to 0.01 (the landmarks
+# move a little), which costs about 0.5 to 1 point
+SCORE_K = 0.07
 
 # How much each landmark counts, both when lining the face up with the model face and when measuring the difference.
 # The jaw line is noisy and moves with hair, beard and head angle, so it counts little. The nose and eyes are
-# found very reliably and are the core of the face's shape, so they count the most. Brows and the outer lips move
-# a bit with expression, so they count a medium amount. The inner lips mostly show if the mouth is open or
-# smiling, which isn't the face's shape, so they don't count.
+# found very reliably and are the core of the face's shape, so they count the most. Brows move a bit with
+# expression, so they count a medium amount. The outer lips move a lot when smiling (a small smile would cost
+# about 2 points at 0.6), so they count little. The inner lips mostly show if the mouth is open or smiling,
+# which isn't the face's shape, so they don't count.
 JAW_WEIGHT = 0.3
 BROW_WEIGHT = 0.6
 NOSE_WEIGHT = 1.0
 EYE_WEIGHT = 1.0
-OUTER_LIP_WEIGHT = 0.6
+OUTER_LIP_WEIGHT = 0.3
 INNER_LIP_WEIGHT = 0.0
 POINT_WEIGHTS = np.array([JAW_WEIGHT] * 17 + [BROW_WEIGHT] * 10 + [NOSE_WEIGHT] * 9 + [EYE_WEIGHT] * 12
                          + [OUTER_LIP_WEIGHT] * 12 + [INNER_LIP_WEIGHT] * 8)
@@ -315,8 +348,8 @@ MIRROR_PAIRS = ([16 - i for i in range(17)]                      # jaw
                 + [64, 63, 62, 61, 60, 67, 66, 65])              # inner lips
 # How lopsided a face must be (difference between the two sides, as a share of the eye width) for symmetry 0
 SYMMETRY_WORST = 0.08
-# How much symmetry can change the score: 0.1 means from -10% (symmetry 0) to +10% (symmetry 1)
-SYMMETRY_WEIGHT = 0.1
+# Like SKIN_PENALTY: added to the shape error, from 0 at symmetry 1 to this at symmetry 0
+SYMMETRY_PENALTY = 0.01
 
 BOY_PERFECT_X = [44, 49, 57, 62, 73, 97, 128, 162, 200, 239, 268, 293, 315, 324, 328, 332, 334, 61, 77, 103, 129, 154, 210, 238, 263, 289, 308, 186, 187, 187, 188, 164, 177, 191, 205, 218, 95, 112, 132, 149, 131, 111, 225, 240, 259, 276, 261, 242, 138, 157, 177, 194, 211, 230, 250, 231, 213, 195, 178, 157, 146, 178, 195, 212, 241, 211, 194, 177]
 BOY_PERFECT_Y = [248, 291, 334, 375, 414, 448, 476, 498, 502, 493, 467, 438, 404, 366, 325, 284, 242, 243, 226, 223, 227, 234, 231, 224, 220, 222, 236, 265, 292, 318, 346, 362, 365, 368, 363, 359, 269, 262, 262, 271, 275, 275, 269, 260, 260, 265, 271, 271, 407, 399, 395, 398, 394, 394, 400, 416, 425, 428, 428, 422, 408, 407, 407, 404, 402, 405, 408, 408]
@@ -362,7 +395,11 @@ def shape_error(xList, yList, gender):
     perfectX, perfectY = getPerfs(gender)
     perfect = np.column_stack([perfectX, perfectY]).astype(np.float64)
     selfie = np.column_stack([xList, yList]).astype(np.float64)
-    return float(weighted_rms(align(selfie, perfect), perfect) / eye_width(perfect))
+    # A face looks just as good in a mirror, and a mirrored photo (like from a selfie camera) shouldn't change
+    # the score, so compare the face both ways round and keep the closest
+    mirrored = selfie[MIRROR_PAIRS] * [-1.0, 1.0]
+    err = min(weighted_rms(align(selfie, perfect), perfect), weighted_rms(align(mirrored, perfect), perfect))
+    return float(err / eye_width(perfect))
 
 def score_from_error(err):
     # Turns a shape error into a score from 0 to 10, an exact match gives 10
@@ -380,9 +417,9 @@ def symmetry(xList, yList):
 
 def rate_face(img, gender):
     # Rates the face in img against the boy or girl model face.
-    # Returns a dict with score (0 to 10), clarity (None if the cheeks couldn't be seen), skinFactor, symmetry,
-    # symmetryFactor, shapeError and picture (a copy with the landmarks and cheek squares drawn on it).
-    # Raises FaceError if it can't be rated.
+    # Returns a dict with score (0 to 10), shapeError, clarity (None if the cheeks couldn't be judged), skinPenalty,
+    # skinFactor, symmetry, symmetryPenalty, symmetryFactor and picture (a copy with the landmarks and cheek
+    # squares drawn on it). Raises FaceError if it can't be rated.
     img = to_bgr(img)
     h, w = img.shape[:2]
     if max(h, w) > MAX_PICTURE_SIZE:
@@ -405,24 +442,24 @@ def rate_face(img, gender):
     clarity = skin_clarity(img, picture, selfieX, selfieY)
 
     shapeError = shape_error(selfieX, selfieY, gender)
-    score = score_from_error(shapeError)
 
-    skinFactor = 1.0
-    if clarity is not None:
-        # Clarity 0.5 leaves the score as it is, clearer skin raises it and uneven skin lowers it
-        skinFactor = 1 + SKIN_WEIGHT * (2 * clarity - 1)
-        score *= skinFactor
-
-    # Same idea for symmetry: a face with both sides alike gets a little extra, a lopsided one a little less
+    # Uneven skin and a lopsided face count as a little extra shape error. There's no penalty when the cheeks
+    # couldn't be judged, so a hidden cheek or a beard doesn't lower the score
+    skinPenalty = 0.0 if clarity is None else SKIN_PENALTY * (1 - clarity)
     faceSymmetry = symmetry(selfieX, selfieY)
-    symmetryFactor = 1 + SYMMETRY_WEIGHT * (2 * faceSymmetry - 1)
-    score *= symmetryFactor
+    symmetryPenalty = SYMMETRY_PENALTY * (1 - faceSymmetry)
+    score = score_from_error(shapeError + skinPenalty + symmetryPenalty)
 
-    # The factors could push a great face above 10, so keep it in range
-    score = float(min(max(score, 0), 10))
+    # The same penalties as how many times smaller they made the score, to show it
+    skinFactor = float(np.exp(-skinPenalty / SCORE_K))
+    symmetryFactor = float(np.exp(-symmetryPenalty / SCORE_K))
 
-    return {"score": score, "clarity": clarity, "skinFactor": skinFactor, "symmetry": faceSymmetry,
-            "symmetryFactor": symmetryFactor, "shapeError": shapeError, "picture": picture}
+    # Odd landmarks (for example all on top of each other) could give "not a number", count that as 0
+    score = 0.0 if np.isnan(score) else float(np.clip(score, 0, 10))
+
+    return {"score": score, "shapeError": shapeError, "clarity": clarity, "skinPenalty": skinPenalty,
+            "skinFactor": skinFactor, "symmetry": faceSymmetry, "symmetryPenalty": symmetryPenalty,
+            "symmetryFactor": symmetryFactor, "picture": picture}
 
 
 def main():
