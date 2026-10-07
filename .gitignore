@@ -23,3 +23,6 @@ shape_predictor_68_face_landmarks.dat
 
 # Editor settings (contain paths to this PC's Python)
 .vscode/
+
+# Your saved ratings normally live in %APPDATA%\AI Face Rater, never in the repo
+history.csv
