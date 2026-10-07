@@ -34,7 +34,7 @@ Needs Python 3.10 or newer with tkinter (included in the normal Windows installe
 pip install -r requirements.txt
 ```
 
-On Windows, `pip install dlib` may need CMake and the Visual Studio C++ build tools unless a prebuilt wheel exists for your Python version.
+On Windows, `pip install dlib` may need CMake and the Visual Studio C++ build tools unless a prebuilt wheel exists for your Python version. There is no dlib build for Python 3.14 yet, so with several Pythons installed, install the packages into an older one, e.g. `py -3.12 -m pip install -r requirements.txt`. `Face Rater.bat` automatically starts the app with the first Python that has the packages. In VS Code, pick that Python with **Python: Select Interpreter**.
 
 The dlib model `shape_predictor_68_face_landmarks.dat` isn't in this repo because it's too large. Download it from http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2, unzip it, and put it next to the scripts.
 

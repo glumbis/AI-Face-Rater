@@ -20,3 +20,6 @@ shape_predictor_68_face_landmarks.dat
 
 # Claude Code agent worktrees
 .claude/
+
+# Editor settings (contain paths to this PC's Python)
+.vscode/

@@ -14,8 +14,11 @@ except ImportError as e:
     root = tk.Tk()
     root.withdraw()
     # e.name is None when the package was found but something inside it failed to import, then show the whole message
+    # With several Pythons installed, a plain "pip install" can go to a different Python than this one, so name it
+    python = sys.executable.replace("pythonw.exe", "python.exe")
     messagebox.showerror("AI Face Rater", f"Missing Python package: {e.name or e}\n\n"
-                                          "Install the packages with:\npip install -r requirements.txt")
+                                          f"This is Python {sys.version.split()[0]}. Install the packages for it with:\n"
+                                          f'"{python}" -m pip install -r requirements.txt')
     sys.exit(1)
 
 

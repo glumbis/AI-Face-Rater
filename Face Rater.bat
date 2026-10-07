@@ -1,5 +1,13 @@
 @echo off
 rem Double-click this to start AI Face Rater without a terminal window staying open
 cd /d "%~dp0"
-rem The py launcher (pyw) finds Python even when it isn't on PATH, so use it when it's installed
-where pyw >nul 2>nul && (start "" pyw -3 face_rater_app.py) || start "" pythonw face_rater_app.py
+rem With several Pythons installed, the default one may not have the packages (dlib has no build for the newest
+rem Python yet), so use the first Python that has them. The py launcher finds Python even when it is not on PATH.
+for %%v in (3.14 3.13 3.12 3.11 3.10) do (
+    py -%%v -c "import cv2, dlib, numpy, PIL" >nul 2>nul && (
+        start "" pyw -%%v face_rater_app.py
+        exit /b
+    )
+)
+rem No Python with the packages: start anyway, so the app can say which package is missing
+start "" pythonw face_rater_app.py
