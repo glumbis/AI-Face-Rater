@@ -731,7 +731,7 @@ class FaceRaterApp:
         self.customWidgets.append(self.aboutButton)
         self.label(header, "Compare with the model face", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
         self.gender = tk.StringVar(value="boy")
-        self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl"), ("Average", "average")],
+        self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
                                       self.gender_changed, panelW, px(40))
         self.genderToggle.pack()
         self.customWidgets.append(self.genderToggle)
@@ -995,7 +995,11 @@ class FaceRaterApp:
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
-        self.set_status(f"Rated against the {self.gender.get()} model", NEUTRAL)
+        # With several model faces of that gender, say which one the face is most like
+        if result["modelFaceCount"] > 1:
+            self.set_status(f"Closest to {result['modelFace']}", NEUTRAL)
+        else:
+            self.set_status(f"Rated against the {self.gender.get()} model", NEUTRAL)
 
         clarity = result["clarity"]
         skinNote = ""

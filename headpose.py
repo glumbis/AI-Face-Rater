@@ -10,16 +10,18 @@ import numpy as np
 # ---------- Limits ----------
 # How many degrees the head may be turned to the side, or tilted up or down. MediaPipe's head angles are steady (the
 # angle of a head that doesn't move wobbles by only about 0.15 degrees, and the two model faces read 0 to 5 degrees),
-# so a picture can be refused for a head that is only a little off. A head turned 10 degrees already costs about 2
-# points, so 12 degrees of turn is the limit. Tilt is allowed a bit more, because people looking at the screen
-# under the camera tilt down a little (and the face doesn't look as lopsided when it tilts as when it turns)
+# so a picture can be refused for a head that is only a little off. The rating turns the head back in 3D before
+# comparing it (see TILT_SEARCH in landmarkdetect.py), so a slightly turned or tilted head costs (almost) nothing.
+# Turning is kept to 12 degrees, because then the far side of the face starts to hide behind the nose and its
+# landmarks are guesses. Tilt is allowed much more, because people looking at the screen under the camera tilt down,
+# and a tilted face hides little. Over 25 degrees the forehead or chin is so foreshortened that it gets less reliable
 MAX_TURN = 12
-MAX_TILT = 15
+MAX_TILT = 25
 # The live preview gives a gentle tip earlier. It doesn't stop anything. The tip comes when the (smoothed) angle
 # is over HINT_TURN / HINT_TILT, and goes away again when it's HINT_MARGIN degrees back under, so it doesn't flicker
 # (the margin is wider than the smoothed angles wobble, but small enough to be easy to hit when you straighten up)
 HINT_TURN = 8
-HINT_TILT = 10
+HINT_TILT = 18
 HINT_MARGIN = 2
 
 # The tip in the live preview, and the message when a picture is refused, for each way of facing

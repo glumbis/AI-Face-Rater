@@ -88,8 +88,8 @@ async function create(mode, delegate, mp, fileset, model) {
 // the eye distance (1.6 px on a 640 px photo), and the model faces and the desktop app's numbers come from the CPU
 // path, so the GPU would rate the same photo up to a point lower. VIDEO (the live preview) uses the GPU when there is
 // one, because it only draws the dots and needs the speed.
-// detect gives { points478px: [[x, y] * 478], matrix: 4x4 rows or null } for the biggest face, or null if there is none.
-// The points are in the pixels of the source: x = x_norm * width - 0.5, like the Python app.
+// detect gives { points478px: [[x, y, depth] * 478], matrix: 4x4 rows or null } for the biggest face, or null if there is none.
+// The points are in the pixels of the source: x = x_norm * width - 0.5, like the Python app (depth = z_norm * width).
 // VIDEO mode needs a timestamp in milliseconds that grows with every call.
 export async function createLandmarker(mode, onProgress) {
   const { mp, fileset } = await loadLibrary();
@@ -137,7 +137,7 @@ export async function createLandmarker(mode, onProgress) {
       });
       const which = boxes.indexOf(Math.max(...boxes));
       return {
-        points478px: faces[which].map((p) => [p.x * w - 0.5, p.y * h - 0.5]),
+        points478px: faces[which].map((p) => [p.x * w - 0.5, p.y * h - 0.5, p.z * w]),
         matrix: matrixRows(result.facialTransformationMatrixes?.[which]),
       };
     },

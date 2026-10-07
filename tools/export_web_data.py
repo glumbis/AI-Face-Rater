@@ -1,11 +1,11 @@
 """Writes web/js/facedata.js from the Python modules, so the website uses exactly the same data and constants.
 
-Run it from the repo root whenever facelayout.py, landmarkdetect.py, headpose.py or phototips.py change:
+Run it from the repo root whenever facelayout.py, modelfaces.py, landmarkdetect.py, headpose.py or phototips.py change:
 
     py -3.14 tools/export_web_data.py
 
 Nothing in the output is typed by hand: the layout (landmark subset, weights, mirror pairs, cheek/eye/nose points),
-the boy / girl / average model faces and every upper-case constant of landmarkdetect, headpose and phototips are
+the boy and girl model faces and every upper-case constant of landmarkdetect, headpose and phototips are
 read from the imported modules.
 """
 import hashlib
@@ -24,11 +24,11 @@ import landmarkdetect  # noqa: E402
 import phototips  # noqa: E402
 
 OUT = os.path.join(ROOT, "web", "js", "facedata.js")
-SOURCES = ("facelayout.py", "landmarkdetect.py", "headpose.py", "phototips.py")
+SOURCES = ("facelayout.py", "modelfaces.py", "landmarkdetect.py", "headpose.py", "phototips.py")
 
 # Module-level names that are not constants for the website (file paths and the like)
 SKIP = {"SCRIPT_DIR", "LANDMARKER_PATH", "LANDMARKER_URL", "IMAGE_TO_RATE",
-        "AVERAGE_PERFECT_X", "AVERAGE_PERFECT_Y", "MODEL_FACES"}  # the model faces are exported as MODEL_FACES
+        "MODEL_FACES"}  # the model faces are exported as MODEL_FACES and MODEL_FACE_NAMES
 # Where each module's constants go, in this order (a name used by several modules gets the value of the last one in
 # the flat CONST; the per-module objects below always have each module's own value)
 # For a name several modules define differently, the plain name in CONST is the first of these
@@ -114,7 +114,10 @@ def main():
         "EYE_OUTER": list(facelayout.EYE_CORNERS),
         "FACE_WIDTH": list(facelayout.FACE_WIDTH_POINTS),
         "NOSE_BRIDGE": list(facelayout.NOSE_BRIDGE_POINTS),
-        "MODEL_FACES": {name: points(*landmarkdetect.getPerfs(name)) for name in landmarkdetect.MODEL_FACES},
+        "MODEL_FACES": {gender: [points(face["x"], face["y"]) for face in landmarkdetect.model_faces(gender)]
+                        for gender in landmarkdetect.MODEL_FACES},
+        "MODEL_FACE_NAMES": {gender: [face["name"] for face in landmarkdetect.model_faces(gender)]
+                             for gender in landmarkdetect.MODEL_FACES},
         "CONST": flat,
         "CONST_LANDMARKDETECT": per_module["landmarkdetect"],
         "CONST_HEADPOSE": per_module["headpose"],
@@ -131,17 +134,19 @@ def main():
         "EYE_OUTER": "Positions of the outer eye corners (their distance is the face size).",
         "FACE_WIDTH": "Positions at the temples (the face width).",
         "NOSE_BRIDGE": "Positions on the bridge of the nose.",
-        "MODEL_FACES": "Model faces boy / girl / average: 162 [x, y] each.",
+        "MODEL_FACES": "The model faces of each gender (from modelfaces.py): a list of faces, 162 [x, y] each.",
+        "MODEL_FACE_NAMES": "Their names (\"Boy 1\", \"Boy 2\", ...), in the same order.",
         "CONST": "Every upper-case constant of landmarkdetect.py, headpose.py and phototips.py (flat). A name that several "
                  "modules define with different values (SHARPNESS_WIDTH) is there as HEADPOSE_SHARPNESS_WIDTH and "
                  "PHOTOTIPS_SHARPNESS_WIDTH, and the plain name is headpose's (see CONST_* below too).",
         "CONST_LANDMARKDETECT": "The same constants per module (CONST_HEADPOSE, CONST_PHOTOTIPS): use these for names more than one module defines.",
         "SOURCE_HASH": "Hash of the Python sources this file was made from (golden.json carries the same one).",
     }
-    object_exports = ("MODEL_FACES", "REGIONS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE", "CONST_PHOTOTIPS")
+    object_exports = ("MODEL_FACES", "MODEL_FACE_NAMES", "REGIONS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE",
+                      "CONST_PHOTOTIPS")
     lines = [
         "// GENERATED FILE. Do not edit by hand.",
-        "// Made by tools/export_web_data.py from facelayout.py, landmarkdetect.py, headpose.py and phototips.py.",
+        "// Made by tools/export_web_data.py from facelayout.py, modelfaces.py, landmarkdetect.py, headpose.py and phototips.py.",
         "// Whenever a limit or layout changes in the Python files, re-run (from the repo root):",
         "//     py -3.14 tools/export_web_data.py && py -3.14 tools/make_golden.py",
         "// and the website is in sync again. All numbers here come from the Python modules.",

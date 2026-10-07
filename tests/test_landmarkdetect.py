@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 
 import cv2
@@ -19,7 +20,14 @@ if not os.path.isfile(MODEL_FILE):
 
 import facelayout  # noqa: E402  (imported after the check, so a missing model skips instead of failing)
 import landmarkdetect  # noqa: E402
-from landmarkdetect import FaceError, detect_face, getPerfs, landmark_detect, rate_face, read_image  # noqa: E402
+import modelfaces  # noqa: E402
+from landmarkdetect import FaceError, detect_face, landmark_detect, model_faces, rate_face, read_image  # noqa: E402
+
+
+def model(gender):
+    # The landmarks of the first model face of a gender (perBoy.jpg or perGirl.jpg) as xList, yList
+    face = model_faces(gender)[0]
+    return face["x"], face["y"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -151,17 +159,18 @@ def test_mirror_pairs_swap_left_and_right():
 
 
 def test_mirror_pairs_are_on_opposite_sides_of_the_model_faces():
-    for gender in ("boy", "girl", "average"):
-        x, y = (np.array(a) for a in getPerfs(gender))
-        middle = (x[facelayout.position(168)] + x[facelayout.position(152)]) / 2
-        for i, partner in enumerate(landmarkdetect.MIRROR_PAIRS):
-            if partner != i:
-                assert (x[i] - middle) * (x[partner] - middle) < 0
-                assert abs(y[i] - y[partner]) < 0.1 * np.ptp(y)
+    for gender in landmarkdetect.MODEL_FACES:
+        for face in model_faces(gender):
+            x, y = np.array(face["x"]), np.array(face["y"])
+            middle = (x[facelayout.position(168)] + x[facelayout.position(152)]) / 2
+            for i, partner in enumerate(landmarkdetect.MIRROR_PAIRS):
+                if partner != i:
+                    assert (x[i] - middle) * (x[partner] - middle) < 0
+                    assert abs(y[i] - y[partner]) < 0.1 * np.ptp(y)
 
 
 def test_cheeks_and_face_width_landmarks_are_where_they_should_be():
-    x, y = (np.array(a) for a in getPerfs("boy"))
+    x, y = (np.array(a) for a in model("boy"))
     left, right = facelayout.LEFT_CHEEK_POINTS, facelayout.RIGHT_CHEEK_POINTS
     assert len(left) == len(right) == 4
     assert x[left].mean() < x[facelayout.position(4)] < x[right].mean()
@@ -192,7 +201,9 @@ def test_landmark_detect_blank_picture_finds_nothing():
 
 def test_detect_face_gives_landmarks_and_head_direction(boy_img):
     found = detect_face(boy_img)
-    assert len(found.xList) == len(found.yList) == 162
+    assert len(found.xList) == len(found.yList) == len(found.zList) == 162
+    # The nose tip is nearer the camera than the outer eye corners (depth grows away from the camera)
+    assert found.zList[facelayout.position(4)] < found.zList[facelayout.position(33)]
     turn, tilt = found.angles
     # (a frontal face must sit well inside the preview tip's limits, HINT_TURN and HINT_TILT)
     assert abs(turn) < 3 and abs(tilt) < 7
@@ -201,7 +212,7 @@ def test_detect_face_gives_landmarks_and_head_direction(boy_img):
 def test_landmarks_are_in_the_pixels_of_the_picture_whatever_the_size_searched(boy_img):
     # The model faces were made from perBoy.jpg with this same detector, so its landmarks are the model face's.
     # Looking in a shrunk copy gives the landmarks in the full picture's pixels too
-    modelX, modelY = getPerfs("boy")
+    modelX, modelY = model("boy")
     full = detect_face(boy_img)
     assert np.abs(np.array(full.xList) - modelX).max() < 0.2 and np.abs(np.array(full.yList) - modelY).max() < 0.2
     small = detect_face(boy_img, detectScale=0.5)
@@ -264,53 +275,73 @@ def test_model_face_is_facing_the_camera(boy_img, girl_img):
         assert landmarkdetect.facing_problem(detect_face(img).angles) is None
 
 
-# ---------- getPerfs and the average face ----------
+# ---------- The model faces ----------
 
-def test_get_perfs_unknown_gender_raises_value_error():
+@pytest.mark.parametrize("gender", ["dog", "average", ""])
+def test_an_unknown_gender_raises_value_error(gender):
     with pytest.raises(ValueError):
-        getPerfs("dog")
+        model_faces(gender)
 
 
-def test_get_perfs_gives_a_landmark_list_for_every_model_face():
+def test_every_gender_has_model_faces_with_162_landmarks():
     for gender in landmarkdetect.MODEL_FACES:
-        x, y = getPerfs(gender)
-        assert len(x) == len(y) == 162
-    assert getPerfs("Average") == getPerfs("average")
+        faces = model_faces(gender)
+        assert faces and all(len(face["x"]) == len(face["y"]) == 162 for face in faces)
+        assert len({face["name"] for face in faces}) == len(faces)
+    assert model_faces("Boy") == model_faces("boy")
 
 
-def test_the_average_face_is_halfway_between_the_boy_and_the_girl_face():
-    boy, girl = (np.column_stack(getPerfs(g)) for g in ("boy", "girl"))
-    average = np.column_stack(getPerfs("average"))
-    # It is in the same place and size as the boy face (the girl face was lined up onto it)
-    assert np.abs(average.mean(axis=0) - boy.mean(axis=0)).max() < 15
-    assert landmarkdetect.eye_width(average) == pytest.approx(landmarkdetect.eye_width(boy), rel=0.05)
-    # Equally far from both, and each of the two is half as far from it as from each other
-    toBoy = landmarkdetect.shape_error(*getPerfs("average"), "boy")
-    toGirl = landmarkdetect.shape_error(*getPerfs("average"), "girl")
-    apart = landmarkdetect.shape_error(*getPerfs("girl"), "boy")
-    assert toBoy == pytest.approx(toGirl, rel=0.1)
-    assert toBoy == pytest.approx(apart / 2, rel=0.1)
-    assert landmarkdetect.shape_error(*getPerfs("average"), "average") == pytest.approx(0, abs=1e-9)
+def test_every_model_face_picture_is_in_modelfaces_py():
+    # Adding a picture (perBoy2.jpg, ...) needs tools/make_model_faces.py to be run again
+    pictures = sorted(name for name in os.listdir(REPO_DIR)
+                      if re.fullmatch(r"(perBoy|perGirl)\d*\.jpg", name))
+    listed = sorted(face["file"] for faces in modelfaces.FACES.values() for face in faces)
+    assert listed == pictures
 
 
-def test_average_face_is_as_symmetric_as_the_model_faces():
-    for gender in ("boy", "girl", "average"):
-        assert landmarkdetect.symmetry(*getPerfs(gender)) > 0.6
+def test_model_faces_are_the_landmarks_of_their_pictures():
+    for gender in landmarkdetect.MODEL_FACES:
+        for face in model_faces(gender):
+            found = detect_face(landmarkdetect.limit_size(read_image(os.path.join(REPO_DIR, face["file"]))))
+            assert np.abs(np.array(found.xList) - face["x"]).max() < 0.2
+            assert np.abs(np.array(found.yList) - face["y"]).max() < 0.2
 
 
-def test_a_model_face_looks_like_itself_and_the_average_is_in_between(boy_img, girl_img):
-    for img, own, other in ((boy_img, "boy", "girl"), (girl_img, "girl", "boy")):
-        ownScore = rate_face(img, own)["score"]
-        averageScore = rate_face(img, "average")["score"]
-        otherScore = rate_face(img, other)["score"]
-        assert ownScore > averageScore > otherScore
+def test_model_faces_are_quite_symmetric():
+    for gender in landmarkdetect.MODEL_FACES:
+        for face in model_faces(gender):
+            assert landmarkdetect.symmetry(face["x"], face["y"]) > 0.6
+
+
+def two_boys(monkeypatch):
+    # Pretend there are two boy model faces: the girl face as "Boy 1" and the boy face as "Boy 2"
+    girl, boy = model_faces("girl")[0], model_faces("boy")[0]
+    monkeypatch.setitem(modelfaces.FACES, "boy", [dict(girl, name="Boy 1"), dict(boy, name="Boy 2")])
+
+
+def test_the_closest_model_face_counts(boy_img, girl_img, monkeypatch):
+    alone = rate_face(boy_img, "boy")
+    assert alone["modelFace"] == "Boy 1" and alone["modelFaceCount"] == 1
+    girlAsGirl = rate_face(girl_img, "girl")
+    two_boys(monkeypatch)
+    # The boy face is closest to the boy face ("Boy 2"), and gets the same score as with only that one
+    result = rate_face(boy_img, "boy")
+    assert result["modelFace"] == "Boy 2" and result["modelFaceCount"] == 2
+    assert result["score"] == pytest.approx(alone["score"]) and result["shapeError"] == pytest.approx(alone["shapeError"])
+    # and the girl face is closest to "Boy 1" (which is the girl face)
+    result = rate_face(girl_img, "boy")
+    assert result["modelFace"] == "Boy 1" and result["score"] == pytest.approx(girlAsGirl["score"])
+    errors = landmarkdetect.model_errors(*model("girl"), "boy")
+    assert [name for _, name in errors] == ["Boy 1", "Boy 2"] and errors[0][0] < errors[1][0]
 
 
 # ---------- rate_face ----------
 
 def test_rate_face_result_has_the_expected_keys(boy_img):
     result = rate_face(boy_img, "boy")
-    assert {"score", "clarity", "symmetry", "picture"} <= set(result)
+    assert {"score", "clarity", "symmetry", "picture", "modelFace", "modelFaceCount"} <= set(result)
+    # The factors say how many times smaller each penalty made the score
+    assert 0 < result["skinFactor"] <= 1 and 0 < result["symmetryFactor"] <= 1
     picture = result["picture"]
     assert isinstance(picture, np.ndarray)
     assert picture.ndim == 3 and picture.shape[2] == 3 and picture.dtype == np.uint8
@@ -332,10 +363,13 @@ def test_a_model_face_scores_itself_near_the_top(boy_img, girl_img):
     assert rate_face(boy_img, "boy")["shapeError"] < 0.001
 
 
-def test_two_quite_different_faces_score_about_five(boy_img, girl_img):
-    # This is what SCORE_K is tuned for
-    assert 4.5 < rate_face(boy_img, "girl")["score"] < 5.5
-    assert 4.5 < rate_face(girl_img, "boy")["score"] < 5.5
+def test_two_different_faces_score_in_the_middle(boy_img, girl_img):
+    # Two different people are about SCORE_MID apart, so they get a middling score (with one model face per gender
+    # perBoy as a girl and perGirl as a boy get about 3.3)
+    for img, gender in ((boy_img, "girl"), (girl_img, "boy")):
+        result = rate_face(img, gender)
+        assert 0.025 < result["shapeError"] < 0.035
+        assert 2 < result["score"] < 5
 
 
 def test_boy_face_scores_higher_as_boy(boy_img):
@@ -381,23 +415,23 @@ def test_a_picture_without_head_angles_is_still_rated(boy_img, monkeypatch):
 
 
 # The scores come from the shape error (0 = identical). Two different real faces (perBoy against the girl model
-# face and the other way round) are about 0.035 apart, and the same face in a slightly different picture 0.003 to
+# face and the other way round) are about 0.030 apart, and the same face in a slightly different picture 0.003 to
 # 0.008 (this detector's landmarks wobble about half as much as dlib's did), so a change that is only landmark
 # noise must stay well below the difference between two faces
 SAME_FACE_TOLERANCE = 0.015
 
 
 def shape_error_of(img, gender):
-    xList, yList = landmark_detect(img)
-    return landmarkdetect.shape_error(xList, yList, gender)
+    found = detect_face(img)
+    return landmarkdetect.shape_error(found.xList, found.yList, gender, found.zList)
 
 
 @pytest.mark.parametrize("picture, gender", [
     (BOY_PICTURE, "boy"),
     (BOY_PICTURE, "girl"),
     (GIRL_PICTURE, "boy"),
-    (GIRL_PICTURE, "average"),
-], ids=["perBoy-as-boy", "perBoy-as-girl", "perGirl-as-boy", "perGirl-as-average"])
+    (GIRL_PICTURE, "girl"),
+], ids=["perBoy-as-boy", "perBoy-as-girl", "perGirl-as-boy", "perGirl-as-girl"])
 @pytest.mark.parametrize("degrees", [10, -10])
 def test_small_rotation_barely_changes_the_shape_error(picture, gender, degrees):
     # A head tilted a little to one side is the same face. This compares the shape error and not the score,
@@ -435,21 +469,47 @@ def test_the_same_face_after_small_changes_still_scores_high(boy_img, girl_img):
 
 def test_shape_error_of_the_model_face_itself_is_zero():
     for gender in landmarkdetect.MODEL_FACES:
-        perfectX, perfectY = getPerfs(gender)
-        assert landmarkdetect.shape_error(perfectX, perfectY, gender) == pytest.approx(0, abs=1e-9)
+        for face in model_faces(gender):
+            assert landmarkdetect.shape_error(face["x"], face["y"], gender) == pytest.approx(0, abs=1e-9)
     assert landmarkdetect.score_from_error(0) == pytest.approx(10)
 
 
-def test_the_boy_and_girl_model_faces_are_different_by_about_the_tuned_amount():
-    # SCORE_K is tuned so that this difference is worth about 5 points
-    err = landmarkdetect.shape_error(*getPerfs("girl"), "boy")
-    assert landmarkdetect.score_from_error(err) == pytest.approx(5.1, abs=0.4)
-
-
 def test_score_from_error_goes_down_as_the_error_goes_up():
-    scores = [landmarkdetect.score_from_error(err) for err in (0, 0.02, 0.05, 0.1, 0.5)]
-    assert scores == sorted(scores, reverse=True)
+    scores = [landmarkdetect.score_from_error(err) for err in (0, 0.01, 0.02, 0.025, 0.03, 0.04, 0.05, 0.1, 0.5)]
+    assert all(a > b for a, b in zip(scores, scores[1:]))
     assert all(0 <= s <= 10 for s in scores)
+
+
+def test_the_score_spreads_ordinary_faces_out():
+    mid = landmarkdetect.SCORE_MID
+    score = landmarkdetect.score_from_error
+    assert score(mid) == pytest.approx(5)
+    # Ordinary faces are about 0.02 to 0.04 from a model face, which spreads over most of the scale
+    assert score(0.8 * mid) > 7.5 and score(1.2 * mid) < 3
+    assert score(0.02) > 8 and score(0.04) < 1.5
+    # while the same face in another photo (under 0.01, plus a little skin and symmetry penalty) is still about 10
+    assert score(0.01 + landmarkdetect.SKIN_PENALTY / 2 + landmarkdetect.SYMMETRY_PENALTY / 2) > 9.9
+
+
+def tilted_and_turned(found, tilt, turn):
+    # The landmarks of a head tilted and turned in 3D by that many degrees (x, y and depth lists)
+    points = np.column_stack([found.xList, found.yList, found.zList])
+    middle = points.mean(axis=0)
+    a, b = np.radians(tilt), np.radians(turn)
+    tilting = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+    turning = np.array([[np.cos(b), 0, -np.sin(b)], [0, 1, 0], [np.sin(b), 0, np.cos(b)]])
+    return ((points - middle) @ (tilting @ turning).T + middle).T
+
+
+@pytest.mark.parametrize("tilt, turn", [(20, 0), (-20, 0), (0, 10), (15, -8)])
+def test_a_tilted_or_turned_head_is_turned_back_before_comparing(boy_img, tilt, turn):
+    # Seen flat, 20 degrees of tilt changes the face more than going from the boy to the girl face, but with the
+    # landmarks' depth the face is turned back and still matches itself
+    x, y, z = tilted_and_turned(detect_face(boy_img), tilt, turn)
+    assert landmarkdetect.shape_error(x, y, "boy") > 0.03
+    assert landmarkdetect.shape_error(x, y, "boy", z) < 0.002
+    # and the other model face is still as far away as before
+    assert landmarkdetect.shape_error(x, y, "girl", z) == pytest.approx(shape_error_of(boy_img, "girl"), abs=0.003)
 
 
 # ---------- alignment and symmetry ----------
@@ -471,7 +531,7 @@ def test_symmetry_ignores_a_mirrored_picture(boy_img):
 
 
 def test_a_lopsided_face_is_less_symmetric():
-    x, y = (np.array(a, dtype=np.float64) for a in getPerfs("average"))
+    x, y = (np.array(a, dtype=np.float64) for a in model("boy"))
     eye = landmarkdetect.eye_width(np.column_stack([x, y]))
     normal = landmarkdetect.symmetry(x, y)
     # One eye (and iris) moved down by 12% of the eye width, so the two sides are different

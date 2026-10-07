@@ -13,8 +13,8 @@ MAX_TIPS = 2
 MEASURE_MAX_SIZE = 960
 
 # Head direction in degrees (turn to the side, tilt up or down). The same limits as the live preview's tip (a picture
-# with the head turned more than MAX_TURN / MAX_TILT is refused and never gets here), and a head turned 10 degrees
-# already loses a little score
+# with the head turned more than MAX_TURN / MAX_TILT is refused and never gets here). The rating turns the head back
+# before comparing, but the further it is turned, the more the landmarks of the far side are guesses
 TURN_TIP = HINT_TURN
 TILT_TIP = HINT_TILT
 # Sharpness: variance of the Laplacian of the face, on a copy of the face this wide. Lower than this is blurry

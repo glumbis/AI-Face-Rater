@@ -40,7 +40,7 @@ export function rateFace(imageData, points, matrix, reference, source = 'camera'
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const mid = (points[10][0] + points[152][0]) / 2;
   const sym = Math.max(0, Math.min(1, 1 - (Math.abs(points[1][0] - mid) / (maxX - minX)) * 4));
-  const bias = { boy: 0, girl: -0.5, average: 0.4 }[reference] ?? 0;
+  const bias = { boy: 0, girl: -0.5 }[reference] ?? 0;
   const score = Math.max(0, Math.min(10, 6.2 + 2.6 * sym + bias));
   const side = Math.round((maxX - minX) * 0.2);
   const cheek = (p) => {
