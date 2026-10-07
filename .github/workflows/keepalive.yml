@@ -1,0 +1,31 @@
+name: Keep the leaderboard database awake
+
+# Free Supabase projects are paused after a week without use. Once a week this asks the database for one leaderboard
+# row, which counts as use. It does nothing while web/js/config.js has no Supabase URL and key (no leaderboard).
+# GitHub itself switches scheduled workflows off after 60 days without any commit; re-enable it under Actions then.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Call top_scores
+        run: |
+          url=$(sed -n "s/^export const SUPABASE_URL = '\(.*\)';.*/\1/p" web/js/config.js)
+          key=$(sed -n "s/^export const SUPABASE_KEY = '\(.*\)';.*/\1/p" web/js/config.js)
+          if [ -z "$url" ] || [ -z "$key" ]; then
+            echo "No Supabase URL and key in web/js/config.js: nothing to keep awake."
+            exit 0
+          fi
+          curl -fsS --max-time 30 -X POST "${url%/}/rest/v1/rpc/top_scores" \
+            -H "apikey: $key" -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
+            -d '{"p_reference":"boy","p_limit":1}' > /dev/null
+          echo "Leaderboard database answered."

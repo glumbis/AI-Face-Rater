@@ -7,7 +7,8 @@ import * as history from './history.js';
 import * as share from './share.js';
 import { createLandmarker, detect as detectSafe } from './landmarker.js';
 import * as overlay from './overlay.js';
-import { registerServiceWorker } from './config.js';
+import * as board from './leaderboard.js';
+import { registerServiceWorker, LEADERBOARD_MIN_AGE } from './config.js';
 
 // ---------- Settings ----------
 // The live preview looks for the face in a copy this wide, which is much faster than the full frame
@@ -54,6 +55,11 @@ const el = {
   regions: $('regions'), legend: $('legend'), hint: $('hint'), primary: $('primaryBtn'), pick: $('pickBtn'), shareBtn: $('shareBtn'),
   file: $('file'), about: $('about'), aboutBtn: $('aboutBtn'), clearBtn: $('clearBtn'), clearNote: $('clearNote'),
   reference: $('reference'),
+  community: $('community'), communityLine: $('communityLine'), addBoardBtn: $('addBoardBtn'), boardBtn: $('boardBtn'),
+  addBoard: $('addBoard'), addBoardForm: $('addBoardForm'), nickname: $('nickname'), consent: $('consent'),
+  addBoardInfo: $('addBoardInfo'), addBoardNote: $('addBoardNote'), addBoardSubmit: $('addBoardSubmit'), addBoardCancel: $('addBoardCancel'),
+  board: $('board'), boardRef: $('boardRef'), boardNote: $('boardNote'), boardList: $('boardList'), boardDone: $('boardDone'),
+  boardPrivacy: $('boardPrivacy'), deleteBoardBtn: $('deleteBoardBtn'),
 };
 const overlayCtx = el.overlay.getContext('2d');
 const pictureCtx = el.picture.getContext('2d');
@@ -202,6 +208,7 @@ function resetResultPanel() {
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
   showRegions(null);
+  showCommunity(null);
   el.legend.classList.remove('on');
   el.shareBtn.hidden = true;
   el.shareBtn.disabled = false;
@@ -269,6 +276,113 @@ function showHistory(st, scores = []) {
   el.streak.textContent = st && st.streak >= STREAK_SHOWN_FROM ? `Day streak: ${st.streak}` : '';
 }
 
+// ---------- Leaderboard (only when config.js has a Supabase URL and key) ----------
+// "Better than 63% of 120 players · Average 5.8" and the Add to leaderboard button. No score hides both
+let communityRequest = 0;
+async function showCommunity(score, reference = S.reference) {
+  const request = ++communityRequest;
+  el.communityLine.hidden = true;
+  el.community.hidden = !board.enabled || score === null;
+  if (el.community.hidden) return;
+  try {
+    const stats = await board.communityStats(reference, score);
+    if (request !== communityRequest || !stats) return;
+    el.communityLine.textContent = `Better than ${Math.round(stats.below * 100)}% of ${stats.players} player${stats.players === 1 ? '' : 's'} · Average ${fmt(stats.average)}`;
+    el.communityLine.hidden = false;
+  } catch { /* offline or not reachable: the line just stays away */ }
+}
+
+const REFERENCE_NAMES = { boy: 'Boy', girl: 'Girl' };
+
+function updateAddBoard() {
+  const name = el.nickname.value.trim();
+  const problem = board.nameProblem(name);
+  el.addBoardSubmit.disabled = !el.consent.checked || problem !== null;
+  el.addBoardNote.textContent = problem && name.length >= board.NAME_MIN ? problem : '';
+}
+
+function openAddBoard() {
+  if (!current?.result) return;
+  el.nickname.value = store.get('afr-nickname') ?? '';
+  el.consent.checked = false; // never ticked for them
+  el.addBoardInfo.textContent = `Your score ${fmt(current.result.score)} is for the ${REFERENCE_NAMES[S.reference]} model face. `
+    + 'Submitting again replaces your earlier entry for that model face.';
+  updateAddBoard();
+  el.addBoard.showModal();
+}
+
+async function submitToBoard(e) {
+  e.preventDefault();
+  if (el.addBoardSubmit.disabled || !current?.result) return;
+  const name = el.nickname.value.trim(), reference = S.reference;
+  el.addBoardSubmit.disabled = true;
+  el.addBoardNote.textContent = 'Sending…';
+  try {
+    await board.submitScore({ name, score: current.result.score, reference, regions: current.result.regions });
+  } catch {
+    el.addBoardNote.textContent = 'Could not reach the leaderboard. Try again later.';
+    el.addBoardSubmit.disabled = false;
+    return;
+  }
+  store.set('afr-nickname', name);
+  el.addBoard.close();
+  setStatus(`Added to the ${REFERENCE_NAMES[reference]} leaderboard as ${name}`, 'good');
+  if (current?.result && S.reference === reference) showCommunity(current.result.score, reference);
+}
+
+let boardRequest = 0;
+async function showBoard() {
+  const reference = el.boardRef.querySelector('input:checked').value, request = ++boardRequest;
+  el.boardList.replaceChildren();
+  el.boardNote.textContent = 'Loading…';
+  try {
+    const rows = await board.topScores(reference);
+    if (request !== boardRequest) return;
+    el.boardNote.textContent = rows.length ? '' : 'No scores yet. Be the first!';
+    el.boardList.replaceChildren(...rows.map((row, i) => {
+      const li = document.createElement('li');
+      for (const [tag, cls, text] of [['span', 'rank', String(i + 1)], ['span', 'nick', row.name], ['b', '', fmt(row.score)]]) {
+        const node = document.createElement(tag);
+        if (cls) node.className = cls;
+        node.textContent = text;
+        li.append(node);
+      }
+      return li;
+    }));
+  } catch {
+    if (request === boardRequest) el.boardNote.textContent = 'Could not load the leaderboard. Check your connection and try again.';
+  }
+}
+
+function setupBoard() {
+  for (const node of document.querySelectorAll('.minAge')) node.textContent = LEADERBOARD_MIN_AGE;
+  el.boardBtn.hidden = el.boardPrivacy.hidden = el.deleteBoardBtn.hidden = !board.enabled;
+  el.addBoardBtn.addEventListener('click', openAddBoard);
+  el.nickname.addEventListener('input', updateAddBoard);
+  el.consent.addEventListener('change', updateAddBoard);
+  el.addBoardForm.addEventListener('submit', submitToBoard);
+  el.addBoardCancel.addEventListener('click', () => el.addBoard.close());
+  el.boardBtn.addEventListener('click', () => {
+    el.boardRef.querySelector(`input[value="${S.reference}"]`).checked = true; // starts on the selected model face
+    el.board.showModal();
+    showBoard();
+  });
+  el.boardRef.addEventListener('change', showBoard);
+  el.boardDone.addEventListener('click', () => el.board.close());
+  el.deleteBoardBtn.addEventListener('click', async () => {
+    if (!confirm('Delete all the leaderboard entries made from this browser? This cannot be undone.')) return;
+    el.deleteBoardBtn.disabled = true;
+    try {
+      const removed = await board.deleteMyEntries();
+      el.clearNote.textContent = removed ? `Deleted ${removed} leaderboard ${removed === 1 ? 'entry' : 'entries'}.` : 'You have no leaderboard entries.';
+      if (removed && current?.result) showCommunity(current.result.score);
+    } catch {
+      el.clearNote.textContent = 'Could not reach the leaderboard. Try again later.';
+    }
+    el.deleteBoardBtn.disabled = false;
+  });
+}
+
 // ---------- Modes ----------
 function setMode(mode) {
   S.mode = mode;
@@ -325,6 +439,7 @@ function showError(e, id) {
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
   showRegions(null);
+  showCommunity(null);
   // Nothing was saved, so no arrow, best line, sparkline or badge from an earlier rating of this picture
   showHistory(null);
 }
@@ -396,6 +511,7 @@ function renderResult() {
   showHistory(stats, scores);
   animateScore(result.score);
   el.shareBtn.hidden = false;
+  showCommunity(result.score, reference);
   // On a phone the score is below the picture, so bring it into view
   if (narrow.matches) el.score.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
 }
@@ -616,7 +732,9 @@ el.aboutBtn.addEventListener('click', () => {
   try { el.clearBtn.disabled = history.entryCount() === 0; } catch { el.clearBtn.disabled = false; }
   el.about.showModal();
 });
-el.about.addEventListener('click', (e) => { if (e.target === el.about) el.about.close(); });
+for (const dialog of [el.about, el.addBoard, el.board]) {
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+}
 el.clearBtn.addEventListener('click', () => {
   history.clearHistory();
   if (current?.result) showHistory(null);
@@ -625,7 +743,7 @@ el.clearBtn.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (el.about.open || e.defaultPrevented) return;
+  if (el.about.open || el.addBoard.open || el.board.open || e.defaultPrevented) return;
   const tag = e.target?.tagName;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') { e.preventDefault(); pickPhoto(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -710,6 +828,7 @@ async function main() {
     el.reference.querySelector(`input[value="${saved}"]`).checked = true;
   }
   S.supported = checkSupport();
+  setupBoard();
   setMode('camera');
   if (!S.supported) return;
 

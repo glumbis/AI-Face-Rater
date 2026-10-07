@@ -466,6 +466,43 @@ await test('a share that fails (not allowed) falls back to the download', async 
   try { eq(await shareOrDownload(blobs.light), 'downloaded'); eq(clicks, 1); } finally { HTMLAnchorElement.prototype.click = original; delete navigator.share; delete navigator.canShare; }
 });
 
+// ---------------------------------------------------------------- leaderboard (the parts that need no server)
+group('leaderboard');
+const lb = await import('../js/leaderboard.js');
+const lbConfig = await import('../js/config.js');
+await test('nickname rules: 2 to 20 characters, letters, digits, space . _ -', () => {
+  for (const good of ['Al', 'Anna K.', 'x_y-z 9', 'Ørjan', '日本語', 'a'.repeat(20), '  Kim  ']) eq(lb.nameProblem(good), null, good);
+  for (const bad of ['', ' ', 'A', 'a'.repeat(21), 'no/slash', 'a@b', '<b>hi</b>', 'smile😀', null, undefined]) ok(lb.nameProblem(bad) !== null, JSON.stringify(bad));
+});
+await test('nickname blocklist: case-insensitive, also inside a name or split by separators', () => {
+  for (const bad of ['FUCK', 'xxShitxx', 'Big B.i.t.c.h', 'n i g g a', 'Hitler_fan']) ok(lb.nameProblem(bad) !== null, bad);
+  for (const good of ['Classic', 'Sunny', 'Hello World', 'Sam']) eq(lb.nameProblem(good), null, good);
+});
+await test('config: age 13, consent version 1, and enabled follows the URL and key', () => {
+  eq([lbConfig.LEADERBOARD_MIN_AGE, lbConfig.CONSENT_VERSION], [13, 1]);
+  eq(lb.enabled, Boolean(lbConfig.SUPABASE_URL && lbConfig.SUPABASE_KEY));
+});
+await test('without a URL and key it is off and sends nothing', async () => {
+  if (lb.enabled) return; // a configured site: nothing to prove here
+  const original = window.fetch;
+  let calls = 0;
+  window.fetch = () => { calls++; return Promise.reject(new Error('should not be called')); };
+  try {
+    for (const run of [() => lb.topScores('boy'), () => lb.communityStats('boy', 5), () => lb.submitScore({ name: 'Anna', score: 5, reference: 'boy', regions: {} })]) {
+      let failed = false;
+      try { await run(); } catch { failed = true; }
+      ok(failed, 'rejects');
+    }
+    eq(calls, 0, 'fetch calls');
+  } finally { window.fetch = original; }
+});
+await test('index.html has the leaderboard parts, hidden until it is set up', async () => {
+  const page = await (await fetch(new URL('../index.html', import.meta.url))).text();
+  for (const id of ['boardBtn', 'addBoardBtn', 'addBoard', 'board', 'deleteBoardBtn', 'boardPrivacy']) ok(page.includes(`id="${id}"`), id);
+  ok(/id="boardBtn"[^>]*hidden/.test(page) && /id="community" hidden/.test(page) && /id="deleteBoardBtn" hidden/.test(page), 'hidden by default');
+  ok(!/id="consent"[^>]*checked/.test(page), 'the consent box starts unticked');
+});
+
 // ---------------------------------------------------------------- PWA files
 group('manifest, icons, service worker');
 const base = new URL('../', import.meta.url);

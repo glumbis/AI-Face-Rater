@@ -7,6 +7,8 @@
 //   - MediaPipe from jsDelivr: cached when first used. Pinned URLs (with @x.y.z) never change, so they are served
 //     cache-first; anything unpinned is stale-while-revalidate. The page can also ask for them up front with
 //     postMessage({type: 'cache', urls}) (config.js registerServiceWorker does that).
+//   - Nothing else is touched: the leaderboard's calls to Supabase (another origin, never jsDelivr) are not handled
+//     here at all, so they always go straight to the network and are never cached.
 const BUILD = '__BUILD__';
 const DEV = BUILD.startsWith('__');
 const SHELL_CACHE = `afr-shell-${BUILD}`;
@@ -17,7 +19,7 @@ const KEEP = [SHELL_CACHE, MODEL_CACHE, CDN_CACHE];
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/landmarker.js', 'js/overlay.js', 'js/scoring.js', 'js/headpose.js', 'js/facedata.js',
-  'js/tips.js', 'js/history.js', 'js/share.js', 'js/config.js', 'js/imageops.js',
+  'js/tips.js', 'js/history.js', 'js/share.js', 'js/config.js', 'js/imageops.js', 'js/leaderboard.js',
   'icons/favicon-32.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 const MODEL = 'face_landmarker.task';
@@ -129,4 +131,5 @@ self.addEventListener('fetch', (event) => {
     const pinned = /@\d+\.\d+\.\d+/.test(url.pathname);
     event.respondWith(pinned ? cacheFirst(request, CDN_CACHE) : staleWhileRevalidate(request, CDN_CACHE));
   }
+  // Any other origin (Supabase for the leaderboard included) falls through to the network, uncached
 });
