@@ -244,7 +244,7 @@ h1 { font: 600 28px/1.2 var(--font-display); letter-spacing: -0.01em; }
 /* Segmented control */
 .seg {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 2px;
   padding: 3px;
   border-radius: 10px;

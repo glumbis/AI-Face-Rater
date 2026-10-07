@@ -320,7 +320,8 @@ function renderResult() {
   cur.failed = false;
   cur.result = result;
   showPicture(cur.canvas, cur.mirrored, cur.det.points478px, result.cheeks);
-  setStatus(`Rated against the ${reference} model`, 'neutral');
+  // With several model faces of that gender, say which one the face is most like
+  setStatus(result.modelFaceCount > 1 ? `Closest to ${result.modelFace}` : `Rated against the ${reference} model`, 'neutral');
 
   const clarity = result.clarity ?? null;
   setBar(el.clarityVal, el.clarityBar, clarity, clarity === null ? 'Not counted' : undefined);
@@ -647,7 +648,7 @@ function testHook() {
 async function main() {
   const test = testHook();
   const saved = store.get('afr-reference');
-  if (['boy', 'girl', 'average'].includes(saved)) {
+  if (['boy', 'girl'].includes(saved)) {
     S.reference = saved;
     el.reference.querySelector(`input[value="${saved}"]`).checked = true;
   }

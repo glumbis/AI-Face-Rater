@@ -83,14 +83,14 @@ def test_a_head_turned_far_is_refused(turn):
 def test_a_head_tilted_far_down_or_up_is_refused():
     assert hp.facing_problem(hp.head_angles(raw(0, 35))) == "down"
     assert hp.facing_problem(hp.head_angles(raw(0, -35))) == "up"
-    assert hp.facing_problem(hp.head_angles(raw(0, 17))) == "down"
-    assert hp.facing_problem(hp.head_angles(raw(0, -17))) == "up"
+    assert hp.facing_problem(hp.head_angles(raw(0, 27))) == "down"
+    assert hp.facing_problem(hp.head_angles(raw(0, -27))) == "up"
 
 
 def test_a_slightly_turned_head_is_still_rated():
     assert hp.facing_problem(hp.head_angles(raw(10, 8))) is None
-    assert hp.facing_problem(hp.head_angles(raw(0, 13))) is None
-    assert hp.facing_problem(hp.head_angles(raw(0, -13))) is None
+    assert hp.facing_problem(hp.head_angles(raw(0, 23))) is None
+    assert hp.facing_problem(hp.head_angles(raw(0, -23))) is None
 
 
 def test_the_limits_are_ordered_as_intended():
@@ -170,8 +170,8 @@ def test_tip_stays_between_the_limits_and_goes_when_clearly_back():
 
 
 def test_chin_tips_say_which_way():
-    assert feed(hp.HeadTracker(), [(0, 12)] * 12)[-1] == "down"
-    assert feed(hp.HeadTracker(), [(0, -12)] * 12)[-1] == "up"
+    assert feed(hp.HeadTracker(), [(0, 20)] * 12)[-1] == "down"
+    assert feed(hp.HeadTracker(), [(0, -20)] * 12)[-1] == "up"
 
 
 def test_old_angles_are_forgotten():

@@ -2,7 +2,10 @@
 // facedata.js, which tools/export_web_data.py writes from the Python modules.
 //
 // rateFace(imageData, points478px, matrix, reference, source = "camera") -> { score, clarity, symmetry, shapeError,
-//   skinPenalty, symmetryPenalty, skinFactor, symmetryFactor, cheeks: [{ x1, y1, x2, y2, w, h, square, fraction, mask }] }
+//   modelFace, modelFaceCount, skinPenalty, symmetryPenalty, skinFactor, symmetryFactor,
+//   cheeks: [{ x1, y1, x2, y2, w, h, square, fraction, mask }] }
+// The face gets the score of the model face of that gender it is most like: modelFace is its name ("Boy 3") and
+// modelFaceCount how many that gender has.
 // or throws FaceError(message) (error.name === "FaceError"). source is "camera" or "file": a face that is too small is
 // refused (camera: CONST.MIN_FACE_SIZE, file: CONST.MIN_FACE_SIZE_FILE) before the head angles are checked.
 // clarity is null when the cheeks could not be judged (then there is no skin penalty).
@@ -12,7 +15,8 @@
 // The picture should be no bigger than CONST.MAX_PICTURE_SIZE on the long side (shrink it before looking for the face,
 // as the Python app does).
 import {
-  CHEEK_LEFT, CHEEK_RIGHT, CONST, EYE_OUTER, FACE_WIDTH, MIRROR, MODEL_FACES, NOSE_BRIDGE, SUBSET, WEIGHTS,
+  CHEEK_LEFT, CHEEK_RIGHT, CONST, EYE_OUTER, FACE_WIDTH, MIRROR, MODEL_FACE_NAMES, MODEL_FACES, NOSE_BRIDGE, SUBSET,
+  WEIGHTS,
 } from './facedata.js';
 import { facingProblem, headAngles } from './headpose.js';
 import {
@@ -28,13 +32,14 @@ export class FaceError extends Error {
 
 // ---------- Points ----------
 
-// The 162 landmarks used for rating, as [x, y] pairs, from the 478 points of MediaPipe. The 478 can be [x, y] pairs,
-// {x, y} objects or a flat array x0, y0, x1, y1, ...
+// The 162 landmarks used for rating, as [x, y] pairs (or [x, y, depth] when the depth is there), from the 478 points
+// of MediaPipe. The 478 can be [x, y] or [x, y, depth] arrays, {x, y} objects or a flat array x0, y0, x1, y1, ...
 export function subsetPoints(points478) {
   const get = (i) => {
     if (typeof points478[0] === 'number') return [points478[2 * i], points478[2 * i + 1]];
     const p = points478[i];
-    return Array.isArray(p) ? [p[0], p[1]] : [p.x, p.y];
+    if (Array.isArray(p)) return p.length > 2 ? [p[0], p[1], p[2]] : [p[0], p[1]];
+    return [p.x, p.y];
   };
   return SUBSET.map(get);
 }
@@ -84,18 +89,74 @@ export function weightedRms(a, b, weights = WEIGHTS) {
 }
 
 const eyeWidth = (points) => dist(points[EYE_OUTER[0]], points[EYE_OUTER[1]]);
-const mirrorOf = (points) => MIRROR.map((j) => [-points[j][0], points[j][1]]);
+// Mirrored left to right: the partner landmarks with x the other way round (a depth stays as it is)
+const mirrorOf = (points) => MIRROR.map((j) => [-points[j][0], ...points[j].slice(1)]);
+const RADIANS = Math.PI / 180;
 
-// How different the face shape is from the model face, as a share of the model's eye width. points: 162 [x, y]
-// pairs (or all 478, which are reduced here). reference: "boy", "girl" or "average", or a list of 162 [x, y] pairs.
-export function shapeError(points, reference) {
-  const pts = points.length === 162 ? points : subsetPoints(points);
-  const model = typeof reference === 'string' ? MODEL_FACES[reference.toLowerCase()] : reference;
-  if (!model) throw new Error("reference must be 'boy', 'girl' or 'average'");
-  // A mirrored photo should score the same, so keep the closer of the face and its mirror image
-  const err = Math.min(weightedRms(align(pts, model), model), weightedRms(align(mirrorOf(pts), model), model));
-  return err / eyeWidth(model);
+// The face ([x, y, depth] points) as the camera would see it with the head tilted `tilt` degrees further down and
+// turned `turn` degrees further to the right, as [x, y] points (posed() in landmarkdetect.py)
+function posed(points, tilt, turn) {
+  const a = tilt * RADIANS, b = turn * RADIANS;
+  return points.map((p) => {
+    const z = p[0] * Math.sin(b) + p[2] * Math.cos(b);
+    return [p[0] * Math.cos(b) - p[2] * Math.sin(b), p[1] * Math.cos(a) - z * Math.sin(a)];
+  });
 }
+
+// middle, and the numbers every step from it up to reach away on both sides
+function around(middle, step, reach) {
+  const n = Math.round(reach / step);
+  const out = [];
+  for (let i = -n; i <= n; i++) out.push(middle + i * step);
+  return out;
+}
+
+// The first value with the smallest error(value), like Python's min(values, key=error)
+function best(values, error) {
+  let found = values[0], lowest = Infinity;
+  for (const v of values) {
+    const e = error(v);
+    if (e < lowest) { lowest = e; found = v; }
+  }
+  return found;
+}
+
+// The difference between the face (162 points, with depth or without) and one model face (162 [x, y]) after lining
+// them up, with the head turned back the way that fits best (CONST.TILT_SEARCH), as a share of the model's eye width
+function faceError(points, model) {
+  if (points[0].length < 3) return weightedRms(align(points, model), model) / eyeWidth(model);
+  const error = (tilt, turn) => weightedRms(align(posed(points, tilt, turn), model), model);
+  const { TILT_SEARCH, TURN_SEARCH, POSE_STEP, POSE_FINE_STEP } = CONST;
+  let tilt = best(around(0, POSE_STEP, TILT_SEARCH), (t) => error(t, 0));
+  let turn = best(around(0, POSE_STEP, TURN_SEARCH), (u) => error(tilt, u));
+  tilt = best(around(tilt, POSE_FINE_STEP, POSE_STEP), (t) => error(t, turn));
+  turn = best(around(turn, POSE_FINE_STEP, POSE_STEP), (u) => error(tilt, u));
+  return error(tilt, turn) / eyeWidth(model);
+}
+
+// How different the face shape is from each model face of the gender: [{ error, name }], the error as a share of the
+// model's eye width. points: 162 points (or all 478, which are reduced here), [x, y] or [x, y, depth] (without the
+// depth the head isn't turned back). reference: "boy" or "girl", or one model face as a list of 162 [x, y] pairs
+export function modelErrors(points, reference) {
+  const pts = points.length === 162 ? points : subsetPoints(points);
+  const gender = typeof reference === 'string' ? reference.toLowerCase() : null;
+  const models = gender === null ? [reference] : MODEL_FACES[gender];
+  if (!models || !models.length) throw new Error("reference must be 'boy' or 'girl'");
+  const names = gender === null ? ['Model face'] : MODEL_FACE_NAMES[gender];
+  const mirrored = mirrorOf(pts);
+  // A mirrored photo should score the same, so keep the closer of the face and its mirror image
+  return models.map((model, i) => ({
+    error: Math.min(faceError(pts, model), faceError(mirrored, model)), name: names[i],
+  }));
+}
+
+// The model face of the gender that the face is most like: { error, name } (the first one if two are as close)
+export function closestModelFace(points, reference) {
+  return modelErrors(points, reference).reduce((a, b) => (b.error < a.error ? b : a));
+}
+
+// The shape error against the closest model face of the gender
+export const shapeError = (points, reference) => closestModelFace(points, reference).error;
 
 // 0 (very lopsided) to 1 (symmetric)
 export function symmetry(points) {
@@ -104,7 +165,8 @@ export function symmetry(points) {
   return 1 - Math.min(asymmetry / CONST.SYMMETRY_WORST, 1);
 }
 
-export const scoreFromError = (err) => 10 * Math.exp(-err / CONST.SCORE_K);
+// 10 for an exact match, 5 at CONST.SCORE_MID (score_from_error in landmarkdetect.py)
+export const scoreFromError = (err) => 10 / (1 + (err / CONST.SCORE_MID) ** CONST.SCORE_POWER);
 
 // ---------- Skin clarity ----------
 
@@ -287,8 +349,9 @@ export function sizeProblem(size, current = null) {
 }
 
 // Rates the face. imageData: the picture (ImageData or {data: RGBA, width, height}); points478px: the 478 landmarks in
-// the picture's pixels (x = x_norm * width - 0.5); matrix: MediaPipe's head matrix (see headpose.js; may be null);
-// reference: "boy", "girl" or "average"; source: "camera" (a webcam picture, the face must fill more of it) or "file"
+// the picture's pixels (x = x_norm * width - 0.5), as [x, y, depth] with depth = z_norm * width (without the depth
+// the head isn't turned back before comparing); matrix: MediaPipe's head matrix (see headpose.js; may be null);
+// reference: "boy" or "girl"; source: "camera" (a webcam picture, the face must fill more of it) or "file"
 export function rateFace(imageData, points478px, matrix, reference, source = 'camera') {
   const pts = subsetPoints(points478px);
   // Too far away is checked first, then the way the head faces
@@ -302,14 +365,19 @@ export function rateFace(imageData, points478px, matrix, reference, source = 'ca
   if (problem !== null) throw new FaceError(CONST.REFUSED_MESSAGES[problem]);
 
   const { clarity, cheeks } = skinClarity(imageData, pts);
-  const err = shapeError(pts, reference);
+  const errors = modelErrors(pts, reference);
+  const closest = errors.reduce((a, b) => (b.error < a.error ? b : a));
+  const err = closest.error;
   const skinPenalty = clarity === null ? 0 : CONST.SKIN_PENALTY * (1 - clarity);
   const sym = symmetry(pts);
   const symmetryPenalty = CONST.SYMMETRY_PENALTY * (1 - sym);
   let score = scoreFromError(err + skinPenalty + symmetryPenalty);
+  // How many times smaller each penalty made the score
+  const skinFactor = score / scoreFromError(err + symmetryPenalty);
+  const symmetryFactor = score / scoreFromError(err + skinPenalty);
   score = Number.isNaN(score) ? 0 : Math.min(Math.max(score, 0), 10);
   return {
-    score, shapeError: err, clarity, skinPenalty, skinFactor: Math.exp(-skinPenalty / CONST.SCORE_K),
-    symmetry: sym, symmetryPenalty, symmetryFactor: Math.exp(-symmetryPenalty / CONST.SCORE_K), cheeks,
+    score, shapeError: err, modelFace: closest.name, modelFaceCount: errors.length, clarity, skinPenalty, skinFactor,
+    symmetry: sym, symmetryPenalty, symmetryFactor, cheeks,
   };
 }

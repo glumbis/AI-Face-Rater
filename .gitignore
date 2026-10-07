@@ -2,12 +2,12 @@
 __pycache__/
 .pytest_cache/
 
-# Pictures are not stored in this repo, except the two model faces
+# Pictures are not stored in this repo, except the model faces (perBoy.jpg, perBoy2.jpg, ... perGirl.jpg, perGirl2.jpg, ...)
 *.jpg
 *.jpeg
 *.png
-!perBoy.jpg
-!perGirl.jpg
+!perBoy*.jpg
+!perGirl*.jpg
 # Website icons
 !web/icons/*.png
 

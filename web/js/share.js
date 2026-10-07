@@ -12,7 +12,7 @@ const THEMES = {
     track: '#3c3c3c', chip: '#363636', accent: '#60cdff', onAccent: '#000000', low: '#f3c969' },
 };
 const FONT = "'Segoe UI Variable Display', 'Segoe UI Variable', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
-const REFERENCES = { boy: 'Boy model face', girl: 'Girl model face', average: 'Average model face' };
+const REFERENCES = { boy: 'Boy model face', girl: 'Girl model face' };
 
 function roundedRect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -76,9 +76,9 @@ const percent = (v) => `${Math.round(v * 100)}%`;
 const one = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '–');
 
 // {score, clarity, symmetry, reference, stats, theme} -> Promise<Blob> (image/png, 1080x1350).
-// clarity is 0..1 or null (not counted), symmetry 0..1, reference "boy" | "girl" | "average",
+// clarity is 0..1 or null (not counted), symmetry 0..1, reference "boy" | "girl",
 // stats is what history.stats(reference) returns (or null), theme is "light" or "dark".
-export function makeShareCard({ score, clarity = null, symmetry = null, reference = 'average', stats = null, theme } = {}) {
+export function makeShareCard({ score, clarity = null, symmetry = null, reference = 'boy', stats = null, theme } = {}) {
   const t = THEMES[theme] || THEMES[(typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'];
   const canvas = makeCanvas();
   const ctx = canvas.getContext('2d');
@@ -129,7 +129,7 @@ export function makeShareCard({ score, clarity = null, symmetry = null, referenc
   // The reference as a quiet chip
   ctx.textAlign = 'center';
   ctx.font = font(500, 36);
-  const refText = REFERENCES[reference] || REFERENCES.average;
+  const refText = REFERENCES[reference] || REFERENCES.boy;
   const chipW = ctx.measureText(refText).width + 80;
   ctx.fillStyle = t.chip;
   roundedRect(ctx, cx - chipW / 2, 580, chipW, 72, 36);

@@ -388,7 +388,7 @@ await test('card shows something where the score is (not a blank card)', async (
   ok(ink > 5000, 'score pixels: ' + ink);
 });
 await test('a clarity of null, no stats and a score of 10.0 still make a card', async () => {
-  const a = await makeShareCard({ score: 10, clarity: null, symmetry: 1, reference: 'average', stats: null, theme: 'light' });
+  const a = await makeShareCard({ score: 10, clarity: null, symmetry: 1, reference: 'girl', stats: null, theme: 'light' });
   const b = await makeShareCard({ score: 2.3, clarity: 0.5, symmetry: 0.5, reference: 'boy', stats: { best: null, average: null, count: 0, trend: null, diff: 0, streak: 0 }, theme: 'dark' });
   for (const blob of [a, b]) eq(pngSize(new Uint8Array(await blob.arrayBuffer())), [1080, 1350]);
   document.getElementById('cards').append(...[a, b, blobs.light, blobs.dark].map((blob) => Object.assign(new Image(), { src: URL.createObjectURL(blob), alt: 'share card' })));

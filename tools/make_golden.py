@@ -43,13 +43,13 @@ def png(img):
 
 
 def detect(img):
-    # The same as landmarkdetect.detect_face, but it also keeps all 478 points and the matrix
+    # The same as landmarkdetect.detect_face, but it also keeps all 478 points (x, y and depth) and the matrix
     h, w = img.shape[:2]
     image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(ld.to_bgr(img), cv2.COLOR_BGR2RGB))
     result = ld.load_landmarker(False).detect(image)
     if not result.face_landmarks:
         return None
-    faces = [np.array([(p.x * w - 0.5, p.y * h - 0.5) for p in face]) for face in result.face_landmarks]
+    faces = [np.array([(p.x * w - 0.5, p.y * h - 0.5, p.z * w) for p in face]) for face in result.face_landmarks]
     which = max(range(len(faces)), key=lambda n: np.ptp(faces[n][SUBSET, 0]) * np.ptp(faces[n][SUBSET, 1]))
     return np.round(faces[which], 3), np.round(np.array(result.facial_transformation_matrixes[which]), 6)
 
@@ -59,7 +59,7 @@ SUBSET = facelayout.SUBSET
 
 def evaluate(img, points, matrix):
     # Everything the Python code works out for this picture and these landmarks
-    xs, ys = points[SUBSET, 0].tolist(), points[SUBSET, 1].tolist()
+    xs, ys, zs = points[SUBSET, 0].tolist(), points[SUBSET, 1].tolist(), points[SUBSET, 2].tolist()
     angles = headpose.head_angles(matrix)
     problem = headpose.facing_problem(angles)
     size = ld.face_size(xs, ys, img.shape)
@@ -96,14 +96,17 @@ def evaluate(img, points, matrix):
     symmetryPenalty = ld.SYMMETRY_PENALTY * (1 - sym)
     refs = {}
     for name in REFERENCES:
-        err = ld.shape_error(xs, ys, name)
+        errors = ld.model_errors(xs, ys, name, zs)
+        err, modelFace = ld.closest_model_face(xs, ys, name, zs)
         score = float(np.clip(ld.score_from_error(err + skinPenalty + symmetryPenalty), 0, 10))
-        refs[name] = {"shapeError": err, "score": score}
+        refs[name] = {"shapeError": err, "score": score, "modelFace": modelFace, "modelFaceCount": len(errors),
+                      "errors": [e for e, _ in errors]}
         for source in SOURCES:
             # Check against the real thing, which does the whole detection again
             if refusal[source] is None:
                 full = ld.rate_face(img, name, source)
                 assert abs(full["score"] - score) < 1e-3 and abs(full["shapeError"] - err) < 1e-4, (name, full["score"], score)
+                assert full["modelFace"] == modelFace and full["modelFaceCount"] == len(errors)
             else:
                 try:
                     ld.rate_face(img, name, source)
@@ -239,7 +242,7 @@ def head_cases(real_matrices):
 
     for deg in (-40, -26, -10, 0, 12, 24, 26, 33, 60):
         case(f"turn {deg}", rot("y", deg, 1.3))
-    for deg in (-45, -30, -11, 0, 14, 38, 39, 41, 55):
+    for deg in (-45, -30, -12, -10, 0, 14, 30, 38, 40, 55):
         case(f"tilt {deg}", rot("x", deg, 0.8))
     case("3x3 identity", np.eye(3))
     case("zero", np.zeros((4, 4)))

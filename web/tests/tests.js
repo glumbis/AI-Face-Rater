@@ -8,7 +8,8 @@ import {
   gaussianBlurF32, lbgrToLab, resizeAreaU8, resizeLinearF32,
 } from '../js/imageops.js';
 import {
-  FaceError, cheekInconsistencies, faceSize, rateFace, shapeError, sizeProblem, skinClarity, subsetPoints, symmetry,
+  FaceError, cheekInconsistencies, faceSize, modelErrors, rateFace, shapeError, sizeProblem, skinClarity, subsetPoints,
+  symmetry,
 } from '../js/scoring.js';
 
 const TOL = { score: 0.05, clarity: 0.02, angle: 0.2, shapeError: 1e-4, symmetry: 0.002, size: 1e-9, sharp: 1e-3 };
@@ -142,6 +143,9 @@ async function testCase(c) {
   near(g, 'symmetry from 478 points', 'symmetry', symmetry(c.points), e.symmetry, TOL.symmetry);
   for (const [ref, want] of Object.entries(e.refs)) {
     near(g, `shape error vs ${ref}`, 'shape error', shapeError(pts, ref), want.shapeError, TOL.shapeError);
+    modelErrors(pts, ref).forEach(({ error }, i) => {
+      near(g, `shape error vs ${ref} model face ${i + 1}`, 'shape error', error, want.errors[i], TOL.shapeError);
+    });
     for (const source of ['camera', 'file']) {
       const label = `rateFace ${ref}/${source}`;
       const refusal = e.refusal[source];
@@ -149,6 +153,8 @@ async function testCase(c) {
         const r = rateFace(img, c.points, c.matrix, ref, source);
         if (refusal) { record(g, label, false, `should have been refused: ${refusal}`); continue; }
         near(g, `${label} score`, 'score', r.score, want.score, TOL.score);
+        record(g, `${label} closest model face`, r.modelFace === want.modelFace && r.modelFaceCount === want.modelFaceCount,
+          `got ${r.modelFace} of ${r.modelFaceCount}, want ${want.modelFace} of ${want.modelFaceCount}`);
         near(g, `${label} clarity`, 'clarity', r.clarity, e.clarity, TOL.clarity);
         near(g, `${label} skin penalty`, 'penalty', r.skinPenalty, e.skinPenalty, 1e-3);
         near(g, `${label} symmetry penalty`, 'penalty', r.symmetryPenalty, e.symmetryPenalty, 1e-3);
@@ -176,7 +182,7 @@ function testHeadCases(cases, base) {
     // The same matrix on a real picture: refused for the same reason (the face is big enough)
     if (base && c.angles !== null && c.matrix.length === 4) {
       try {
-        rateFace(base.img, base.points, matrix, 'average', 'camera');
+        rateFace(base.img, base.points, matrix, 'boy', 'camera');
         record(g, 'rateFace refusal', c.problem === null, c.problem ? `should be refused (${c.problem})` : 'rated');
       } catch (error) {
         record(g, 'rateFace refusal', error instanceof FaceError && error.message === c.message, error.message);
