@@ -8,7 +8,7 @@
   --text: #1a1a1a;
   --muted: #666666;
   --faint: #9c9c9c;
-  --footer: #8c8c8c;
+  --footer: #6b6b6b;
   --stage: #e3e3e3;
   --track: #dcdcdc;
   --thumb: #ffffff;
@@ -43,7 +43,7 @@
     --text: #f5f5f5;
     --muted: #a3a3a3;
     --faint: #6f6f6f;
-    --footer: #7d7d7d;
+    --footer: #8a8a8a;
     --stage: #161616;
     --track: #3c3c3c;
     --thumb: #5e5e5e;
@@ -80,6 +80,15 @@ body {
 }
 
 h1, h2, p { margin: 0; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 button { font: inherit; color: inherit; }
 
 :focus-visible {
@@ -363,14 +372,25 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 /* ---------- Phone and narrow windows ---------- */
 
 @media (max-width: 800px) {
-  .app { grid-template-columns: 1fr; gap: 16px; padding: 12px 16px 24px; min-height: 0; }
+  .app { grid-template-columns: 1fr; gap: 16px; padding: 12px 16px 0; min-height: 0; }
   .hero { min-height: 0; padding: 8px; border-radius: 18px; }
   .stage { flex: none; aspect-ratio: 3 / 4; max-height: 66vh; max-height: 66dvh; }
   .panel { padding: 4px 4px 0; }
   .scoreblock { margin-top: 22px; }
   .score .num { font-size: 64px; }
   .shortcuts { display: none; }
-  .bottom { padding-top: 14px; }
+  /* The buttons stay in reach at the bottom of the screen, edge to edge (16px page + 4px panel padding) */
+  .bottom {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin: 14px -20px 0;
+    padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--card-edge);
+    background: var(--card);
+  }
+  /* When a result scrolls the score into view, keep it clear of that bar */
+  .score { scroll-margin-bottom: 220px; }
   .hint { min-height: 3.2em; }
 }
 
