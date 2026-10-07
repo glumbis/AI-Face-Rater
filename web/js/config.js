@@ -16,8 +16,8 @@ export const MP_PRECACHE_URLS = [MP_BUNDLE_URL, `${MP_WASM_URL}/vision_wasm_inte
 // The optional leaderboard (Supabase, see "Leaderboard setup" in the README). Paste the Project URL and the public
 // anon / publishable key here; while either is empty the whole feature is hidden. The key is meant to be public.
 // (.github/workflows/keepalive.yml reads these two lines with sed, so keep them as they are.)
-export const SUPABASE_URL = '';
-export const SUPABASE_KEY = '';
+export const SUPABASE_URL = 'https://ipejupiqurmsoxlgtmob.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_KaH6sHgxACBjLVNsr1dsrg_LnUeUNxl';
 // The age and the wording version of the consent text on the "Add to leaderboard" dialog. Raise CONSENT_VERSION
 // when that text changes in a way that matters; it is stored with each entry.
 export const LEADERBOARD_MIN_AGE = 13;
