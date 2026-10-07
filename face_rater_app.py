@@ -47,17 +47,19 @@ NEUTRAL = "neutral"
 # Colours. Each theme has the same names, so the rest of the code never needs to know which theme is used.
 # Pills are (background, text colour). Only one accent colour is used, everything else is gray
 LIGHT = {
-    "bg": "#f3f3f3", "text": "#1a1a1a", "muted": "#666666", "faint": "#b8b8b8",
+    "bg": "#f3f3f3", "text": "#1a1a1a", "muted": "#666666", "faint": "#9c9c9c", "footer": "#8c8c8c",
     "stage": "#e3e3e3", "track": "#dcdcdc", "thumb": "#ffffff", "thumbEdge": "#d0d0d0",
+    "trackEdge": "#dcdcdc", "segText": "#1a1a1a", "segOff": "#666666", "scoreHigh": "#0067c0", "scoreLow": "#b45309",
     "accent": "#0067c0", "accentHover": "#1a78cb", "accentPress": "#3d8ad2", "onAccent": "#ffffff",
-    "button": "#ffffff", "buttonHover": "#f8f8f8", "buttonPress": "#ececec", "buttonEdge": "#d6d6d6",
+    "button": "#ffffff", "buttonHover": "#f8f8f8", "buttonPress": "#ececec", "buttonEdge": "#d0d0d0",
     "off": "#e6e6e6", "offText": "#a0a0a0",
     GOOD: ("#dff3dc", "#0e5a0e"), WARN: ("#fff1c2", "#6b4700"),
     BAD: ("#fde4e6", "#a4262c"), NEUTRAL: ("#e6e6e6", "#5a5a5a"),
 }
 DARK = {
-    "bg": "#202020", "text": "#f5f5f5", "muted": "#a3a3a3", "faint": "#474747",
-    "stage": "#161616", "track": "#2f2f2f", "thumb": "#4b4b4b", "thumbEdge": "#5a5a5a",
+    "bg": "#202020", "text": "#f5f5f5", "muted": "#a3a3a3", "faint": "#6f6f6f", "footer": "#7d7d7d",
+    "stage": "#161616", "track": "#1f1f1f", "thumb": "#5e5e5e", "thumbEdge": "#6b6b6b",
+    "trackEdge": "#333333", "segText": "#ffffff", "segOff": "#b0b0b0", "scoreHigh": "#60cdff", "scoreLow": "#f3c969",
     "accent": "#60cdff", "accentHover": "#78d5ff", "accentPress": "#52b3e0", "onAccent": "#000000",
     "button": "#2e2e2e", "buttonHover": "#373737", "buttonPress": "#292929", "buttonEdge": "#3e3e3e",
     "off": "#2a2a2a", "offText": "#6d6d6d",
@@ -65,12 +67,17 @@ DARK = {
     BAD: ("#4a2428", "#ff99a4"), NEUTRAL: ("#2e2e2e", "#b4b4b4"),
 }
 
-# What the score shows (faded) when there is no score yet, so the space is already taken
-EMPTY_SCORE = "0.0"
+# What the score shows (faded) when there is no score yet. A dash can't be mistaken for a real score of 0
+EMPTY_SCORE = "\u2013"
 TIP_TEXT = "Look straight at the camera and keep a neutral face."
-LEGEND_TEXT = "Green dots: landmarks\nBlue squares: cheeks checked\nRed: uneven skin"
-# The text under the stats is always this many lines high, so the window doesn't change size when it changes
-CAPTION_LINES = 4
+NO_CAMERA_TEXT = "Pick a photo to get started."
+# The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
+HINT_LINES = 2
+# The colours of the landmark dots and uneven spots drawn on the rated picture (the same as in landmarkdetect.py)
+LEGEND_MINT = "#4ade80"
+LEGEND_RED = "#f87171"
+# How often (in milliseconds) the dots after "Loading..." move on
+LOADING_DOTS_DELAY = 400
 
 # How much bigger shapes are drawn before shrinking them again, which makes their edges smooth
 SMOOTHING = 4
@@ -269,7 +276,7 @@ class Segmented(tk.Canvas):
         cellWidth = (width - 2 * inset) // count
         self.delete("all")
         self.config(bg=c["bg"])
-        self.images = [ImageTk.PhotoImage(shape_image(width, height, radius, c["track"]))]
+        self.images = [ImageTk.PhotoImage(shape_image(width, height, radius, c["track"], c["trackEdge"]))]
         self.create_image(0, 0, anchor="nw", image=self.images[0])
         values = [value for _, value in self.options]
         selected = values.index(self.variable.get()) if self.variable.get() in values else 0
@@ -279,7 +286,7 @@ class Segmented(tk.Canvas):
         self.create_image(inset + selected * cellWidth, inset, anchor="nw", image=thumb)
         for i, (text, value) in enumerate(self.options):
             self.create_text(inset + i * cellWidth + cellWidth / 2, height / 2, text=text, font=self.app.fonts["button"],
-                             fill=c["text"] if i == selected else c["muted"])
+                             fill=c["segText"] if i == selected else c["segOff"])
 
     def click(self, event):
         inset = self.app.px(3)
@@ -362,6 +369,47 @@ class Bar(tk.Label):
         self.config(image=self.image, bg=c["bg"])
 
 
+class Legend(tk.Canvas):
+    # One small row that explains the colours drawn on the rated picture. It's empty until there is a result
+    def __init__(self, parent, app, width, height):
+        super().__init__(parent, width=width, height=height, bd=0, highlightthickness=0, takefocus=0)
+        self.app = app
+        self.size = (width, height)
+        self.shown = False
+        self.images = []
+        self.restyle()
+
+    def show(self, shown):
+        if shown != self.shown:
+            self.shown = shown
+            self.restyle()
+
+    def restyle(self):
+        c = self.app.colors
+        height = self.size[1]
+        self.delete("all")
+        self.config(bg=c["bg"])
+        self.images = []
+        if not self.shown:
+            return
+        size = self.app.px(8)
+        font = self.app.fonts["tiny"]
+        x = 0
+        for kind, colour, text in (("dot", LEGEND_MINT, "Landmarks"), ("square", None, "Cheeks"),
+                                   ("dot", LEGEND_RED, "Uneven skin")):
+            if kind == "dot":
+                swatch = shape_image(size, size, size // 2, colour)
+            else:
+                # The cheek squares are drawn as an outline, so their swatch is an outline too
+                swatch = shape_image(size, size, self.app.px(2), c["bg"], edge=c["muted"])
+            image = ImageTk.PhotoImage(swatch)
+            self.images.append(image)
+            self.create_image(x, (height - size) // 2, anchor="nw", image=image)
+            x += size + self.app.px(6)
+            self.create_text(x, height // 2, text=text, anchor="w", font=font, fill=c["muted"])
+            x += font.measure(text) + self.app.px(16)
+
+
 class FaceRaterApp:
     def __init__(self, root):
         self.root = root
@@ -377,6 +425,9 @@ class FaceRaterApp:
         self.animation = None
         self.canTakePhoto = False
         self.scoreActive = False  # True while a score is shown
+        self.scoreColour = "text"  # the name of the colour of the score, it depends on how good the score is
+        self.cameraHint = TIP_TEXT  # what the hint says in camera mode
+        self.dotCount = 3  # how many dots to show after "Loading"
         self.lastPicture = None  # what the big picture shows now (None = just a message), for redrawing on theme change
         self.message = None
         self.themed = []  # (widget, {option: colour name}), everything that changes colour with the theme
@@ -415,6 +466,7 @@ class FaceRaterApp:
 
         self.root.after(50, self.start)
         self.root.after(THEME_CHECK_DELAY, self.check_theme)
+        self.root.after(LOADING_DOTS_DELAY, self.move_loading_dots)
 
     # ---------- Building the window ----------
 
@@ -446,15 +498,15 @@ class FaceRaterApp:
         text = pick("Segoe UI Variable Text", "Segoe UI")
         textBold = pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold", "Segoe UI")
         display = pick("Segoe UI Variable Display Semib", "Segoe UI Semibold", "Segoe UI")
-        displayLight = pick("Segoe UI Variable Display Semil", "Segoe UI Semilight", "Segoe UI")
         self.fonts = {
             "title": tkFont.Font(root=self.root, family=display, size=19),
-            "score": tkFont.Font(root=self.root, family=displayLight, size=52),
+            "score": tkFont.Font(root=self.root, family=display, size=44),
             "scoreUnit": tkFont.Font(root=self.root, family=display, size=18),
             "body": tkFont.Font(root=self.root, family=text, size=11),
             "bodyBold": tkFont.Font(root=self.root, family=textBold, size=11),
             "button": tkFont.Font(root=self.root, family=text, size=11),
             "buttonBold": tkFont.Font(root=self.root, family=textBold, size=11),
+            "hint": tkFont.Font(root=self.root, family=text, size=11),
             "small": tkFont.Font(root=self.root, family=text, size=10),
             "tiny": tkFont.Font(root=self.root, family=text, size=9),
             "message": tkFont.Font(root=self.root, family=text, size=13),
@@ -493,52 +545,68 @@ class FaceRaterApp:
         self.statusPill = StatusPill(left, self, self.viewW, px(STATUS_ROW))
         self.statusPill.pack()
 
-        # Right: title, model face choice, score and buttons
+        # Right: four groups (title and model face, score, stats, hint and buttons). The two in the middle share
+        # the spare height, so the groups are spread out evenly
         right = self.themed_widget(tk.Frame(main), bg="bg")
         right.grid(row=0, column=1, sticky="ns", padx=(px(PAD), 0))
+        # Rows 1, 3 and 5 are empty and share the spare height equally, so the gaps between the groups are equal
+        for row in (1, 3, 5):
+            right.rowconfigure(row, weight=1, minsize=px(12))
         panelW = px(PANEL_WIDTH)
+        self.customWidgets = []
 
-        # The buttons are packed first so they stick to the bottom, the rest fills from the top
-        self.hintLabel = self.label(right, "Space takes a photo  ·  Esc goes back", "tiny", "muted")
-        self.hintLabel.pack(side="bottom", pady=(px(10), 0))
-        self.pickButton = RoundButton(right, self, "Pick a photo…", self.pick_photo, False, panelW, px(44))
-        self.pickButton.pack(side="bottom", pady=(px(10), 0))
-        self.pickButton.set_enabled(False)
-        self.takeButton = RoundButton(right, self, "Take photo", self.primary_clicked, True, panelW, px(48))
-        self.takeButton.pack(side="bottom")
-        self.customWidgets = [self.pickButton, self.takeButton]
+        def group(row, sticky):
+            frame = self.themed_widget(tk.Frame(right), bg="bg")
+            frame.grid(row=row, column=0, sticky=sticky)
+            return frame
 
-        self.label(right, "Face Rater", "title", anchor="w").pack(anchor="w")
-
-        self.label(right, "Compare with the model face of a", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
+        header = group(0, "nw")
+        self.label(header, "Face Rater", "title", anchor="w").pack(anchor="w")
+        self.label(header, "Compare with the model face of a", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
         self.gender = tk.StringVar(value="boy")
-        self.genderToggle = Segmented(right, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
+        self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
                                       self.gender_changed, panelW, px(40))
         self.genderToggle.pack()
         self.customWidgets.append(self.genderToggle)
 
-        self.label(right, "Beauty score", "small", "muted", anchor="w").pack(anchor="w", pady=(px(22), 0))
-        scoreRow = self.themed_widget(tk.Frame(right), bg="bg")
+        scoreGroup = group(2, "w")
+        self.label(scoreGroup, "Beauty score", "small", "muted", anchor="w").pack(anchor="w")
+        scoreRow = self.themed_widget(tk.Frame(scoreGroup), bg="bg")
         scoreRow.pack(fill="x")
         # The digits of this font are all equally wide, so the "/ 10" next to the number stays in place while it counts
         self.scoreLabel = self.label(scoreRow, EMPTY_SCORE, "score", "faint")
         self.scoreLabel.pack(side="left")
-        self.scoreUnit = self.label(scoreRow, "/ 10", "scoreUnit", "faint")
-        self.scoreUnit.pack(side="left", anchor="s", padx=(self.px(10), 0), pady=(0, self.px(12)))
+        # The "/ 10" sits on the same baseline as the number: both labels end at the bottom, but the text of the
+        # bigger font hangs lower below its baseline, so the small one is lifted by the difference
+        lift = self.fonts["score"].metrics("descent") - self.fonts["scoreUnit"].metrics("descent")
+        self.scoreUnit = self.label(scoreRow, "", "scoreUnit", "muted")
+        self.scoreUnit.pack(side="left", anchor="s", padx=(px(10), 0), pady=(0, lift))
 
-        self.clarityRow = self.make_stat_row(right, "Skin clarity", panelW)
-        self.symmetryRow = self.make_stat_row(right, "Symmetry", panelW)
+        statsGroup = group(4, "w")
+        self.clarityRow = self.make_stat_row(statsGroup, "Skin clarity", panelW, 0)
+        self.symmetryRow = self.make_stat_row(statsGroup, "Symmetry", panelW, px(16))
+        self.legend = Legend(statsGroup, self, panelW, px(20))
+        self.legend.pack(anchor="w", pady=(px(14), 0))
+        self.customWidgets.append(self.legend)
 
-        # The text under the stats, always this many lines high
-        self.caption = tk.Label(right, text="", font=self.fonts["tiny"], justify="left", anchor="nw", bd=0, padx=0, pady=0,
-                                wraplength=panelW, height=CAPTION_LINES, takefocus=0)
-        self.themed_widget(self.caption, bg="bg", fg="muted")
-        self.caption.pack(fill="x", pady=(px(14), 0))
+        # The hint sits right above the buttons. It is always this many lines high, so nothing moves when it changes
+        bottom = group(6, "sew")
+        self.hint = tk.Label(bottom, text=TIP_TEXT, font=self.fonts["hint"], justify="left", anchor="sw", bd=0, padx=0, pady=0,
+                             wraplength=panelW, height=HINT_LINES, takefocus=0)
+        self.themed_widget(self.hint, bg="bg", fg="muted")
+        self.hint.pack(fill="x", pady=(0, px(16)))
+        self.takeButton = RoundButton(bottom, self, "Take photo", self.primary_clicked, True, panelW, px(48))
+        self.takeButton.pack()
+        self.pickButton = RoundButton(bottom, self, "Pick a photo…", self.pick_photo, False, panelW, px(44))
+        self.pickButton.pack(pady=(px(10), 0))
+        self.pickButton.set_enabled(False)
+        self.customWidgets += [self.takeButton, self.pickButton]
+        self.label(bottom, "Space takes a photo  ·  Esc goes back", "tiny", "footer").pack(pady=(px(12), 0))
 
-    def make_stat_row(self, parent, name, panelW):
+    def make_stat_row(self, parent, name, panelW, gap):
         # A name on the left, the percentage on the right and a bar under them
         frame = self.themed_widget(tk.Frame(parent), bg="bg")
-        frame.pack(fill="x", pady=(self.px(16), 0))
+        frame.pack(fill="x", pady=(gap, 0))
         frame.columnconfigure(0, weight=1)
         nameLabel = self.label(frame, name, "body", "text", anchor="w")
         nameLabel.grid(row=0, column=0, sticky="w")
@@ -559,7 +627,7 @@ class FaceRaterApp:
         for widget in self.customWidgets:
             widget.restyle()
         self.statusPill.restyle()
-        self.color_score(self.scoreActive)
+        self.color_score(self.scoreActive, self.scoreColour)
         if self.lastPicture is not None:
             self.show_picture(self.lastPicture)
         else:
@@ -616,13 +684,16 @@ class FaceRaterApp:
     def update_preview(self):
         if self.mode == "camera":
             if self.camera.opened is False:
-                self.show_message("No camera found.\nUse \"Pick a photo…\" instead.")
+                # The message in the picture says what is wrong, so the status pill stays empty
+                self.show_message("No camera found.")
+                self.set_camera_hint(NO_CAMERA_TEXT)
                 self.set_can_take_photo(False)
                 self.set_status("", NEUTRAL)
             elif self.camera.lost():
-                self.show_message("Camera disconnected.\nPlug it back in, or use \"Pick a photo…\".")
+                self.show_message("Camera disconnected.\nPlug it back in to continue.")
+                self.set_camera_hint(NO_CAMERA_TEXT)
                 self.set_can_take_photo(False)
-                self.set_status("Camera disconnected.", BAD)
+                self.set_status("", NEUTRAL)
             else:
                 frame = self.camera.latest()
                 if frame is not None:
@@ -633,6 +704,7 @@ class FaceRaterApp:
         # Mirror it, so moving your head to the left moves it to the left on the screen, like a mirror
         frame = cv2.flip(frame, 1)
         self.set_can_take_photo(True)
+        self.set_camera_hint(TIP_TEXT)
 
         h, w = frame.shape[:2]
         found = ld.landmark_detect(frame, detectScale=min(1.0, PREVIEW_DETECT_WIDTH / w))
@@ -643,7 +715,7 @@ class FaceRaterApp:
             problem = ld.facing_problem(xList, yList, frame.shape)
             if problem is None:
                 self.set_status("Looking good! Press Take photo or Space.", GOOD)
-                color = (80, 200, 80)
+                color = (128, 222, 74)
             else:
                 self.set_status(f"Face the camera! You are facing {problem}.", WARN)
                 color = (40, 160, 245)
@@ -707,30 +779,30 @@ class FaceRaterApp:
             result = ld.rate_face(picture, self.gender.get())
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
-            self.caption.config(text="Take a new photo, or pick another one.")
+            self.set_hint("Take a new photo, or pick another one.")
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
-        self.set_status("Done!", GOOD)
+        self.set_status(f"Rated against the {self.gender.get()} model", NEUTRAL)
 
         clarity = result["clarity"]
         if clarity is None:
             self.clarityRow["value"].config(text="Not counted", fg=self.colors["muted"])
             self.clarityRow["bar"].set_value(None)
-            note = "\n\nCheeks hidden, bearded or black-and-white, so skin clarity is not counted."
+            self.set_hint("Skin clarity is not counted: the cheeks are hidden, bearded or black-and-white.")
         else:
             self.clarityRow["value"].config(text=f"{round(clarity * 100)}%", fg=self.colors["text"])
             self.clarityRow["bar"].set_value(clarity)
-            note = ""
         self.symmetryRow["value"].config(text=f"{round(result['symmetry'] * 100)}%", fg=self.colors["text"])
         self.symmetryRow["bar"].set_value(result["symmetry"])
-        self.caption.config(text=LEGEND_TEXT + note)
+        self.legend.show(True)
         self.animate_score(result["score"])
 
     def animate_score(self, score, duration=1.5):
         # Count up to the score, like the terminal version did
         start = time.perf_counter()
-        self.color_score(True)
+        # The number is tinted by how good the score is: blue for high, amber for low, plain in between
+        self.color_score(True, "scoreHigh" if score >= 8 else "scoreLow" if score < 4 else "text")
 
         def step():
             t = min((time.perf_counter() - start) / duration, 1.0)
@@ -757,11 +829,12 @@ class FaceRaterApp:
 
     # ---------- Score panel ----------
 
-    def color_score(self, active):
-        # The score is dark when there is one, and faded while there isn't
+    def color_score(self, active, colour="text"):
+        # The score has its own colour when there is one, and is faded (with no "/ 10") while there isn't
         self.scoreActive = active
-        self.scoreLabel.config(fg=self.colors["text"] if active else self.colors["faint"])
-        self.scoreUnit.config(fg=self.colors["muted"] if active else self.colors["faint"])
+        self.scoreColour = colour
+        self.scoreLabel.config(fg=self.colors[colour] if active else self.colors["faint"])
+        self.scoreUnit.config(text="/ 10" if active else "", fg=self.colors["muted"])
 
     def reset_result_panel(self):
         # Empty score and stats still take up their space, so the window doesn't change size when a result shows up
@@ -770,7 +843,18 @@ class FaceRaterApp:
         for row in (self.clarityRow, self.symmetryRow):
             row["value"].config(text="–", fg=self.colors["muted"])
             row["bar"].set_value(None)
-        self.caption.config(text=TIP_TEXT if self.mode == "camera" else "")
+        self.legend.show(False)
+        self.set_hint(self.cameraHint if self.mode == "camera" else "")
+
+    def set_hint(self, text):
+        if self.hint.cget("text") != text:
+            self.hint.config(text=text)
+
+    def set_camera_hint(self, text):
+        # The hint for camera mode. A result has its own hints, so it only shows when the camera is on
+        self.cameraHint = text
+        if self.mode == "camera":
+            self.set_hint(text)
 
     def refresh_buttons(self):
         if self.mode == "result":
@@ -817,16 +901,29 @@ class FaceRaterApp:
         self.view.config(image=self.photo, text="")
 
     def show_message(self, text):
-        # Text in the picture area instead of a picture ("Loading...", "No camera found.")
+        # Text in the picture area instead of a picture ("Loading...", "No camera found.").
+        # A message ending in "..." gets moving dots, so it's clear the app is working
         if self.message == text and self.lastPicture is None:
             return
         self.lastPicture = None
         self.message = text
         self.redraw_message()
 
+    def message_text(self):
+        if self.message and self.message.endswith("..."):
+            # Spaces fill up the missing dots, so the text stays in the same place
+            return self.message[:-3] + "." * self.dotCount + " " * (3 - self.dotCount)
+        return self.message or ""
+
     def redraw_message(self):
         self.photo = ImageTk.PhotoImage(self.stage(None))
-        self.view.config(image=self.photo, text=self.message or "")
+        self.view.config(image=self.photo, text=self.message_text())
+
+    def move_loading_dots(self):
+        if self.message and self.message.endswith("...") and self.lastPicture is None:
+            self.dotCount = (self.dotCount + 1) % 4
+            self.view.config(text=self.message_text())
+        self.root.after(LOADING_DOTS_DELAY, self.move_loading_dots)
 
 
 def main():
