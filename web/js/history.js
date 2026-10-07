@@ -4,7 +4,7 @@
 // memory until the page is closed.
 
 export const MODELS = ['boy', 'girl', 'average'];
-// The up/down arrow only shows when the score is at least this far from your earlier average (history.TREND_MIN_DIFF)
+// The up/down arrow only shows when the score is at least this far from your previous photo's score (history.TREND_MIN_DIFF)
 export const TREND_MIN_DIFF = 0.1;
 
 const KEY = 'afr.history.v1';
@@ -114,23 +114,28 @@ function streakOf(list, now) {
 }
 
 // How the latest rating of a reference looks next to the earlier ones (history.compare and history.streak):
-// {best, average, count} include the latest rating, trend is "up", "down" or null against the AVERAGE OF THE EARLIER
-// ones (diff is the difference), streak counts days over all references. With a single rating there is nothing to
-// compare with (count is 1: show no best/average line then, like the desktop app). With no rating at all: best and
-// average are null and count is 0.
+// {best, average, count} include the latest rating, trend is "up", "down" or null against the PREVIOUS photo, the
+// rating before the latest one (diff is the difference), streak counts days over all references. With a single
+// rating there is nothing to compare with (count is 1: show no best/average line then, like the desktop app). With
+// no rating at all: best and average are null and count is 0.
 export function stats(reference, now = Date.now()) {
   const list = read();
   const streak = streakOf(list, now);
   const scores = list.filter((e) => e.r === reference).map((e) => e.s);
   if (!scores.length) return { best: null, average: null, count: 0, trend: null, diff: 0, streak };
-  const latest = scores[scores.length - 1], earlier = scores.slice(0, -1);
   let trend = null, diff = 0;
-  if (earlier.length) {
-    diff = latest - earlier.reduce((a, b) => a + b, 0) / earlier.length;
+  if (scores.length >= 2) {
+    diff = scores[scores.length - 1] - scores[scores.length - 2];
     trend = diff >= TREND_MIN_DIFF ? 'up' : diff <= -TREND_MIN_DIFF ? 'down' : null;
   }
   return { best: Math.max(...scores), average: scores.reduce((a, b) => a + b, 0) / scores.length,
     count: scores.length, trend, diff, streak };
+}
+
+// The latest n scores for a reference, oldest first (for a small chart). Fewer if there are fewer; [] if none.
+export function series(reference, n = 12) {
+  const scores = read().filter((e) => e.r === reference).map((e) => e.s);
+  return n > 0 ? scores.slice(-n) : [];
 }
 
 // How many ratings are saved (for example to enable a "Clear history" button)

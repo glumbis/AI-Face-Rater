@@ -20,6 +20,8 @@ const MAX_HINT_LINES = 3;
 
 const TIP_TEXT = 'Look straight at the camera.';
 const NO_CAMERA_TEXT = 'Pick a photo to get started.';
+const INTRO_TEXT = 'Take a photo to see how closely your face matches the model face. Nothing leaves your device.';
+const PICTURE_LABEL = 'The rated picture with the face outline drawn on it';
 const NO_FACE_TEXT = 'No face found. Face the camera!';
 const HINT_MESSAGES = {
   side: 'Turn a little towards the camera.',
@@ -41,8 +43,8 @@ const el = {
   message: $('message'), messageTitle: $('messageTitle'), messageText: $('messageText'),
   progress: $('progress'), progressBar: $('progressBar'), messageAction: $('messageAction'), drop: $('drop'),
   status: $('status'), statusText: $('statusText'),
-  score: $('score'), scoreNum: $('scoreNum'), scoreUnit: $('scoreUnit'), trend: $('trend'),
-  streak: $('streak'), historyLine: $('historyLine'),
+  score: $('score'), scoreLive: $('scoreLive'), scoreNum: $('scoreNum'), scoreUnit: $('scoreUnit'), trend: $('trend'),
+  streak: $('streak'), historyLine: $('historyLine'), histMeta: $('histMeta'), pbBadge: $('pbBadge'), spark: $('spark'),
   clarityVal: $('clarityVal'), clarityBar: $('clarityBar'), symmetryVal: $('symmetryVal'), symmetryBar: $('symmetryBar'),
   legend: $('legend'), hint: $('hint'), primary: $('primaryBtn'), pick: $('pickBtn'), shareBtn: $('shareBtn'),
   file: $('file'), about: $('about'), aboutBtn: $('aboutBtn'), clearBtn: $('clearBtn'), clearNote: $('clearNote'),
@@ -51,6 +53,7 @@ const el = {
 const overlayCtx = el.overlay.getContext('2d');
 const pictureCtx = el.picture.getContext('2d');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const narrow = matchMedia('(max-width: 800px)');
 
 // ---------- State ----------
 const S = {
@@ -160,6 +163,7 @@ function refreshCameraUI() {
   el.primary.textContent = 'Take photo';
   el.pick.disabled = !(S.supported && S.modelState === 'ready');
   el.shareBtn.hidden = true;
+  el.historyLine.textContent = live ? INTRO_TEXT : '';
   if (!live) {
     setStatus('');
     setHint(S.supported && (S.cam === 'denied' || S.cam === 'none' || S.cam === 'insecure' || S.cam === 'lost' || S.cam === 'error') ? NO_CAMERA_TEXT : '');
@@ -184,17 +188,23 @@ function resetResultPanel() {
   el.trend.hidden = true;
   el.streak.textContent = '';
   el.historyLine.textContent = '';
+  showExtras([], false);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
   el.legend.classList.remove('on');
   el.shareBtn.hidden = true;
   el.shareBtn.disabled = false;
+  el.scoreLive.textContent = '';
+  el.picture.setAttribute('aria-label', PICTURE_LABEL);
 }
 
 function animateScore(score) {
   const band = score >= 8 ? 'high' : score < 4 ? 'low' : 'mid';
   el.score.dataset.band = band;
   el.scoreUnit.hidden = false;
+  // The number animates silently; screen readers get the final score once
+  el.scoreLive.textContent = `Score ${fmt(score)} out of 10`;
+  el.picture.setAttribute('aria-label', `${PICTURE_LABEL}. Score ${fmt(score)} out of 10.`);
   cancelAnimationFrame(scoreAnimation);
   clearTimeout(scoreTimer);
   if (reducedMotion.matches) { el.scoreNum.textContent = fmt(score); return; }
@@ -209,15 +219,37 @@ function animateScore(score) {
   scoreTimer = setTimeout(() => { cancelAnimationFrame(scoreAnimation); el.scoreNum.textContent = fmt(score); }, SCORE_ANIMATION_MS + 50);
 }
 
-function showHistory(st) {
+// The sparkline of the latest scores (from 3 ratings on) and the "New personal best!" badge
+const SPARK_POINTS = 12;
+const SPARK_MIN = 3;
+function showExtras(scores, newBest) {
+  const spark = scores.length >= SPARK_MIN;
+  el.pbBadge.hidden = !newBest;
+  el.spark.toggleAttribute('hidden', !spark); // an SVG element has no .hidden property
+  el.histMeta.hidden = !(spark || newBest);
+  if (!spark) return;
+  const lo = Math.min(...scores), hi = Math.max(...scores);
+  const pts = scores.map((v, i) => [3 + (90 * i) / (scores.length - 1), hi === lo ? 12 : 21 - (18 * (v - lo)) / (hi - lo)]);
+  el.spark.firstElementChild.setAttribute('points', pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
+  const last = pts[pts.length - 1];
+  el.spark.lastElementChild.setAttribute('cx', last[0]);
+  el.spark.lastElementChild.setAttribute('cy', last[1]);
+  el.spark.setAttribute('aria-label', `Last ${scores.length} scores, from ${fmt(scores[0])} to ${fmt(scores[scores.length - 1])}`);
+}
+
+function showHistory(st, scores = []) {
+  // A new best: the latest score is higher (as shown) than every earlier one for this model face
+  const prev = scores.slice(0, -1);
+  const newBest = prev.length > 0 && Math.round(scores[scores.length - 1] * 10) > Math.round(Math.max(...prev) * 10);
+  showExtras(scores.slice(-SPARK_POINTS), newBest);
   if (st && st.count >= 2 && st.best != null) {
     el.historyLine.textContent = `Your best: ${fmt(st.best)}  ·  Average: ${fmt(st.average)} (${st.count} photos)`;
   } else {
     el.historyLine.textContent = '';
   }
   if (st?.trend === 'up' || st?.trend === 'down') {
-    const diff = typeof st.diff === 'number' ? ` ${fmt(Math.abs(st.diff))}` : '';
-    el.trend.textContent = `${st.trend === 'up' ? '▲' : '▼'}${diff}`;
+    // "since last photo" is added under it by the CSS
+    el.trend.textContent = `${st.trend === 'up' ? '▲' : '▼'} ${fmt(Math.abs(st.diff))}`;
     el.trend.dataset.trend = st.trend;
     el.trend.hidden = false;
   } else {
@@ -277,6 +309,8 @@ function showError(e, id) {
   el.scoreNum.textContent = '–';
   el.scoreUnit.hidden = true;
   el.score.dataset.band = 'none';
+  el.scoreLive.textContent = '';
+  el.picture.setAttribute('aria-label', PICTURE_LABEL);
   setBar(el.clarityVal, el.clarityBar, null);
   setBar(el.symmetryVal, el.symmetryBar, null);
 }
@@ -336,16 +370,19 @@ function renderResult() {
   setHint([...lines, ...cur.tips]);
 
   // Saved once per picture and model face (the same pictureId makes history.js skip a re-rating)
-  let stats = null;
+  let stats = null, scores = [];
   try {
     history.addRating({ reference, score: result.score, clarity, symmetry: result.symmetry, source: cur.source, pictureId: cur.id });
     stats = history.stats(reference);
+    scores = history.series(reference, 2000);
   } catch (e) {
     console.warn('History is not available', e);
   }
-  showHistory(stats);
+  showHistory(stats, scores);
   animateScore(result.score);
   el.shareBtn.hidden = false;
+  // On a phone the score is below the picture, so bring it into view
+  if (narrow.matches) el.score.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
 }
 
 // ---------- Pictures from files, drops and pastes ----------

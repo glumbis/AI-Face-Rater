@@ -51,11 +51,16 @@
 
       <div class="scoreblock">
         <div class="caption row"><span>Beauty score</span><span id="streak"></span></div>
-        <div class="score" id="score" data-band="none" aria-live="polite">
+        <div class="score" id="score" data-band="none">
           <span class="num" id="scoreNum">&ndash;</span><span class="unit" id="scoreUnit" hidden>/ 10</span>
           <span class="trend" id="trend" hidden></span>
         </div>
+        <p class="sr-only" id="scoreLive" role="status"></p>
         <p class="history" id="historyLine"></p>
+        <div class="histmeta" id="histMeta" hidden>
+          <span class="pb" id="pbBadge" hidden>New personal best!</span>
+          <svg class="spark" id="spark" viewBox="0 0 96 24" role="img" hidden><polyline points=""/><circle r="2.5"/></svg>
+        </div>
       </div>
 
       <div class="stats">
@@ -108,6 +113,7 @@
   <dialog id="about" aria-labelledby="aboutTitle">
     <form method="dialog" class="about-body">
       <h2 id="aboutTitle">About</h2>
+      <p><strong>How it works.</strong> Face Rater finds landmark points on your face and compares their layout with the model faces. The best match counts. It is a fun comparison, not a real measure of beauty.</p>
       <p>Photos are processed on this device and never uploaded.</p>
       <p class="about-note" id="clearNote" role="status" aria-live="polite"></p>
       <div class="btn-row">
