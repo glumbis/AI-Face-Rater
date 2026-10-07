@@ -2,11 +2,12 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import tkinter.font as tkFont
+from tkinter import filedialog, messagebox
 
 try:
     import cv2
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageColor, ImageDraw, ImageTk
     import landmarkdetect as ld
 except ImportError as e:
     # Started by double-clicking there's no terminal to show the error in, so show it in a window
@@ -26,15 +27,53 @@ PREVIEW_DETECT_WIDTH = 320
 PREVIEW_DELAY = 30
 # If the camera hasn't sent a new picture for this many seconds, it counts as disconnected
 CAMERA_LOST_AFTER = 1.0
-# Room (in pixels at 100% screen scaling) kept free below the picture for the buttons and score
-LAYOUT_RESERVE = 480
+# How often (in milliseconds) the window checks if Windows switched between light and dark mode
+THEME_CHECK_DELAY = 2000
 
-GOOD = "#1a7f37"
-BAD = "#c62828"
-NEUTRAL = "#555555"
+# Sizes are written for 100% screen scaling and multiplied by the real scaling when the window is built
+PAD = 24  # space around everything
+PANEL_WIDTH = 300  # the column with the score and buttons
+STATUS_ROW = 44  # the row under the picture that holds the status pill
+WINDOW_FRAME = 48  # room for the title bar and window borders
+MAX_VIEW_HEIGHT = 660
+MIN_VIEW_HEIGHT = 300
 
-# The details under the score are three lines (skin clarity, symmetry, colour key), empty lines keep their space
-EMPTY_DETAILS = "\n\n"
+# The status pill has one of these kinds, each with its own colours (see the colour themes below)
+GOOD = "good"
+WARN = "warn"
+BAD = "bad"
+NEUTRAL = "neutral"
+
+# Colours. Each theme has the same names, so the rest of the code never needs to know which theme is used.
+# Pills are (background, text colour). Only one accent colour is used, everything else is gray
+LIGHT = {
+    "bg": "#f3f3f3", "text": "#1a1a1a", "muted": "#666666", "faint": "#b8b8b8",
+    "stage": "#e3e3e3", "track": "#dcdcdc", "thumb": "#ffffff", "thumbEdge": "#d0d0d0",
+    "accent": "#0067c0", "accentHover": "#1a78cb", "accentPress": "#3d8ad2", "onAccent": "#ffffff",
+    "button": "#ffffff", "buttonHover": "#f8f8f8", "buttonPress": "#ececec", "buttonEdge": "#d6d6d6",
+    "off": "#e6e6e6", "offText": "#a0a0a0",
+    GOOD: ("#dff3dc", "#0e5a0e"), WARN: ("#fff1c2", "#6b4700"),
+    BAD: ("#fde4e6", "#a4262c"), NEUTRAL: ("#e6e6e6", "#5a5a5a"),
+}
+DARK = {
+    "bg": "#202020", "text": "#f5f5f5", "muted": "#a3a3a3", "faint": "#474747",
+    "stage": "#161616", "track": "#2f2f2f", "thumb": "#4b4b4b", "thumbEdge": "#5a5a5a",
+    "accent": "#60cdff", "accentHover": "#78d5ff", "accentPress": "#52b3e0", "onAccent": "#000000",
+    "button": "#2e2e2e", "buttonHover": "#373737", "buttonPress": "#292929", "buttonEdge": "#3e3e3e",
+    "off": "#2a2a2a", "offText": "#6d6d6d",
+    GOOD: ("#1d3a23", "#6ccb5f"), WARN: ("#3d3417", "#f3d26b"),
+    BAD: ("#4a2428", "#ff99a4"), NEUTRAL: ("#2e2e2e", "#b4b4b4"),
+}
+
+# What the score shows (faded) when there is no score yet, so the space is already taken
+EMPTY_SCORE = "0.0"
+TIP_TEXT = "Look straight at the camera and keep a neutral face."
+LEGEND_TEXT = "Green dots: landmarks\nBlue squares: cheeks checked\nRed: uneven skin"
+# The text under the stats is always this many lines high, so the window doesn't change size when it changes
+CAPTION_LINES = 4
+
+# How much bigger shapes are drawn before shrinking them again, which makes their edges smooth
+SMOOTHING = 4
 
 
 class Camera:
@@ -95,80 +134,462 @@ class Camera:
         self.thread.join(timeout=2)
 
 
+# ---------- Drawing helpers ----------
+
+def windows_uses_dark_mode():
+    # Reads the "Choose your mode" setting from Windows. Anywhere else, or if it can't be read, use light
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        with key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
+
+
+def shape_image(width, height, radius, fill, edge=None, dot=None):
+    # A rounded rectangle with smooth edges and see-through corners, drawn as a picture because tkinter can't do this.
+    # dot is (middle x, size, colour) for the small coloured circle in the status pill
+    fillRgb = ImageColor.getrgb(fill)
+    big = Image.new("RGBA", (width * SMOOTHING, height * SMOOTHING), fillRgb + (0,))
+    draw = ImageDraw.Draw(big)
+    draw.rounded_rectangle((0, 0, width * SMOOTHING - 1, height * SMOOTHING - 1), radius=radius * SMOOTHING,
+                           fill=fillRgb + (255,), outline=edge, width=SMOOTHING)
+    if dot is not None:
+        middle, size, colour = dot
+        top = (height - size) / 2
+        draw.ellipse(((middle - size / 2) * SMOOTHING, top * SMOOTHING,
+                      (middle + size / 2) * SMOOTHING, (top + size) * SMOOTHING), fill=colour)
+    return big.resize((width, height), Image.Resampling.LANCZOS)
+
+
+class RoundButton(tk.Label):
+    # A flat rounded button. It's a label showing a picture of the button, because ttk buttons can't be rounded.
+    # It never takes the keyboard focus, so Space can't press it by accident
+    def __init__(self, parent, app, text, command, primary, width, height):
+        font = app.fonts["buttonBold"] if primary else app.fonts["button"]
+        super().__init__(parent, text=text, font=font, compound="center", bd=0, padx=0, pady=0,
+                         highlightthickness=0, takefocus=0)
+        self.app = app
+        self.command = command
+        self.primary = primary
+        self.size = (width, height)
+        self.enabled = True
+        self.hover = False
+        self.pressed = False
+        self.images = {}
+        self.bind("<Enter>", lambda e: self.set_hover(True))
+        self.bind("<Leave>", lambda e: self.set_hover(False))
+        self.bind("<ButtonPress-1>", self.press)
+        self.bind("<ButtonRelease-1>", self.release)
+        self.restyle()
+
+    def restyle(self):
+        c = self.app.colors
+        width, height = self.size
+        radius = self.app.px(8)
+        if self.primary:
+            fills = {"normal": c["accent"], "hover": c["accentHover"], "pressed": c["accentPress"]}
+            edge = None
+            self.textColors = {"normal": c["onAccent"], "hover": c["onAccent"], "pressed": c["onAccent"]}
+        else:
+            fills = {"normal": c["button"], "hover": c["buttonHover"], "pressed": c["buttonPress"]}
+            edge = c["buttonEdge"]
+            self.textColors = {"normal": c["text"], "hover": c["text"], "pressed": c["text"]}
+        fills["disabled"] = c["off"]
+        self.textColors["disabled"] = c["offText"]
+        self.images = {state: ImageTk.PhotoImage(shape_image(width, height, radius, fill, None if state == "disabled" else edge))
+                       for state, fill in fills.items()}
+        # Swap to a new picture in the same call as the new colour, the old pictures are gone by now
+        self.config(bg=c["bg"], image=self.images[self.state()])
+        self.draw()
+
+    def state(self):
+        if not self.enabled:
+            return "disabled"
+        if self.pressed:
+            return "pressed"
+        return "hover" if self.hover else "normal"
+
+    def draw(self):
+        state = self.state()
+        self.config(image=self.images[state], fg=self.textColors[state], cursor="hand2" if self.enabled else "")
+
+    def set_enabled(self, enabled):
+        if self.enabled != enabled:
+            self.enabled = enabled
+            self.draw()
+
+    def set_text(self, text):
+        self.config(text=text)
+
+    def set_hover(self, hover):
+        self.hover = hover
+        if not hover:
+            self.pressed = False
+        self.draw()
+
+    def press(self, event):
+        self.pressed = True
+        self.draw()
+
+    def release(self, event):
+        wasPressed = self.pressed
+        self.pressed = False
+        self.draw()
+        # Only a click that also ends on the button counts, so you can slide away to cancel
+        if wasPressed and self.enabled and 0 <= event.x < self.size[0] and 0 <= event.y < self.size[1]:
+            self.command()
+
+
+class Segmented(tk.Canvas):
+    # Two or more choices side by side with a sliding highlight, like the switches in Windows 11
+    def __init__(self, parent, app, variable, options, command, width, height):
+        super().__init__(parent, width=width, height=height, bd=0, highlightthickness=0, takefocus=0)
+        self.app = app
+        self.variable = variable
+        self.options = options  # list of (text, value)
+        self.command = command
+        self.size = (width, height)
+        self.images = []
+        self.bind("<Button-1>", self.click)
+        # Redraw when the variable is changed from anywhere, not only by clicking here
+        variable.trace_add("write", lambda *args: self.restyle())
+        self.restyle()
+
+    def restyle(self):
+        c = self.app.colors
+        width, height = self.size
+        inset = self.app.px(3)
+        radius = self.app.px(8)
+        count = len(self.options)
+        cellWidth = (width - 2 * inset) // count
+        self.delete("all")
+        self.config(bg=c["bg"])
+        self.images = [ImageTk.PhotoImage(shape_image(width, height, radius, c["track"]))]
+        self.create_image(0, 0, anchor="nw", image=self.images[0])
+        values = [value for _, value in self.options]
+        selected = values.index(self.variable.get()) if self.variable.get() in values else 0
+        thumb = ImageTk.PhotoImage(shape_image(cellWidth, height - 2 * inset, radius - inset // 2,
+                                               c["thumb"], c["thumbEdge"]))
+        self.images.append(thumb)
+        self.create_image(inset + selected * cellWidth, inset, anchor="nw", image=thumb)
+        for i, (text, value) in enumerate(self.options):
+            self.create_text(inset + i * cellWidth + cellWidth / 2, height / 2, text=text, font=self.app.fonts["button"],
+                             fill=c["text"] if i == selected else c["muted"])
+
+    def click(self, event):
+        inset = self.app.px(3)
+        cellWidth = (self.size[0] - 2 * inset) // len(self.options)
+        index = min(max((event.x - inset) // cellWidth, 0), len(self.options) - 1)
+        value = self.options[index][1]
+        if value != self.variable.get():
+            self.variable.set(value)
+            self.command()
+
+
+class StatusPill(tk.Canvas):
+    # A small rounded label with a coloured dot, for hints and errors. Empty text shows nothing but keeps its space
+    def __init__(self, parent, app, width, height):
+        super().__init__(parent, width=width, height=height, bd=0, highlightthickness=0, takefocus=0)
+        self.app = app
+        self.size = (width, height)
+        self.text = ""
+        self.kind = NEUTRAL
+        self.image = None
+        self.restyle()
+
+    def show(self, text, kind):
+        if (text, kind) != (self.text, self.kind):
+            self.text = text
+            self.kind = kind
+            self.restyle()
+
+    def restyle(self):
+        c = self.app.colors
+        width, height = self.size
+        self.delete("all")
+        self.config(bg=c["bg"])
+        if not self.text:
+            return
+        font = self.app.fonts["small"]
+        padding = self.app.px(14)
+        dotSize = self.app.px(8)
+        gap = self.app.px(8)
+        pillHeight = self.app.px(32)
+        # A long message is cut with "..." instead of making the pill wider than the picture
+        text = self.text
+        room = width - 2 * padding - dotSize - gap
+        while font.measure(text) > room and len(text) > 1:
+            text = text[:-2].rstrip() + "…"
+        pillWidth = padding * 2 + dotSize + gap + font.measure(text)
+        background, textColour = c[self.kind]
+        self.image = ImageTk.PhotoImage(shape_image(pillWidth, pillHeight, pillHeight // 2, background,
+                                                    dot=(padding + dotSize / 2, dotSize, textColour)))
+        left = (width - pillWidth) // 2
+        top = (height - pillHeight) // 2
+        self.create_image(left, top, anchor="nw", image=self.image)
+        self.create_text(left + padding + dotSize + gap, height // 2, text=text, anchor="w", font=font, fill=textColour)
+
+
+class Bar(tk.Label):
+    # A thin progress bar from 0 to 1, drawn as a picture so the ends are round
+    def __init__(self, parent, app, width, height):
+        super().__init__(parent, bd=0, padx=0, pady=0, highlightthickness=0, takefocus=0)
+        self.app = app
+        self.size = (width, height)
+        self.value = None
+        self.image = None
+        self.restyle()
+
+    def set_value(self, value):
+        # value is 0 to 1, or None for an empty bar
+        if value != self.value:
+            self.value = value
+            self.restyle()
+
+    def restyle(self):
+        c = self.app.colors
+        width, height = self.size
+        picture = shape_image(width, height, height // 2, c["track"])
+        if self.value:
+            fillWidth = max(height, round(width * min(self.value, 1)))
+            picture.alpha_composite(shape_image(fillWidth, height, height // 2, c["accent"]))
+        self.image = ImageTk.PhotoImage(picture)
+        self.config(image=self.image, bg=c["bg"])
+
+
 class FaceRaterApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AI Face Rater")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        # The layout is fixed, so nothing moves around when the state changes
+        self.root.resizable(False, False)
 
         self.camera = None
         self.mode = "camera"  # "camera" shows the live preview, "result" shows a rated picture
         self.currentPicture = None
         self.currentMirrored = False
         self.animation = None
+        self.canTakePhoto = False
+        self.scoreActive = False  # True while a score is shown
+        self.lastPicture = None  # what the big picture shows now (None = just a message), for redrawing on theme change
+        self.message = None
+        self.themed = []  # (widget, {option: colour name}), everything that changes colour with the theme
+        self.photo = None
 
-        # Picture area fits the screen (leaving room for the buttons and score below it), 4:3 like most webcams.
-        # Text and buttons get bigger with Windows' screen scaling, so the room they need grows with it
-        # (tk scaling is pixels per point, which is 96/72 at 100%)
-        screenH = self.root.winfo_screenheight()
-        reserve = int(LAYOUT_RESERVE * float(self.root.tk.call("tk", "scaling")) / (96 / 72))
-        self.viewH = max(300, min(720, int(screenH * 0.55), screenH - reserve))
+        # Windows' screen scaling (1.0 at 100%). tk scaling is pixels per point, which is 96/72 at 100%
+        self.scale = float(self.root.tk.call("tk", "scaling")) / (96 / 72)
+        self.dark = windows_uses_dark_mode()
+        self.colors = DARK if self.dark else LIGHT
+        self.make_fonts()
+
+        # Picture area fits the screen (leaving room for the rest of the window), 4:3 like most webcams
+        areaLeft, areaTop, areaWidth, areaHeight = self.work_area()
+        maxHeight = areaHeight - self.px(WINDOW_FRAME + 2 * PAD + STATUS_ROW)
+        maxWidth = areaWidth - self.px(WINDOW_FRAME + 3 * PAD + PANEL_WIDTH)
+        self.viewH = max(self.px(MIN_VIEW_HEIGHT), min(self.px(MAX_VIEW_HEIGHT), maxHeight, maxWidth * 3 // 4))
         self.viewW = self.viewH * 4 // 3
+        self.make_corner_mask()
 
-        style = ttk.Style()
-        style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("Score.TLabel", font=("Segoe UI", 26, "bold"))
-        style.configure("Big.TButton", font=("Segoe UI", 11), padding=(14, 6))
-
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill="both", expand=True)
-
-        ttk.Label(main, text="AI Face Rater", style="Title.TLabel").pack(anchor="w")
-
-        viewFrame = tk.Frame(main, width=self.viewW, height=self.viewH, bg="#202020")
-        viewFrame.pack(pady=(8, 6))
-        viewFrame.pack_propagate(False)
-        # No border or padding, otherwise a few pixels of the picture are cut off at each side
-        self.view = tk.Label(viewFrame, bg="#202020", fg="white", font=("Segoe UI", 12),
-                             bd=0, padx=0, pady=0, highlightthickness=0)
-        self.view.pack(fill="both", expand=True)
-
-        self.status = tk.Label(main, text="", font=("Segoe UI", 13, "bold"), fg=NEUTRAL, wraplength=self.viewW)
-        self.status.pack(pady=(0, 6))
-
-        genderRow = ttk.Frame(main)
-        genderRow.pack(pady=(0, 6))
-        ttk.Label(genderRow, text="Compare with the model face of a:").pack(side="left", padx=(0, 8))
-        self.gender = tk.StringVar(value="boy")
-        # takefocus=False on the buttons: a clicked button would otherwise get the keyboard focus, and then
-        # Space would press it again as well as taking a photo
-        for text, value in (("Boy", "boy"), ("Girl", "girl")):
-            ttk.Radiobutton(genderRow, text=text, value=value, variable=self.gender, takefocus=False,
-                            command=self.gender_changed).pack(side="left", padx=4)
-
-        buttons = ttk.Frame(main)
-        buttons.pack(pady=(0, 6))
-        self.takeButton = ttk.Button(buttons, text="Take photo  (Space)", style="Big.TButton",
-                                     command=self.take_photo, state="disabled", takefocus=False)
-        self.takeButton.pack(side="left", padx=4)
-        self.pickButton = ttk.Button(buttons, text="Pick a photo...", style="Big.TButton",
-                                     command=self.pick_photo, state="disabled", takefocus=False)
-        self.pickButton.pack(side="left", padx=4)
-        self.backButton = ttk.Button(buttons, text="Back to camera  (Esc)", style="Big.TButton",
-                                     command=self.back_to_camera, takefocus=False)
-
-        # Empty score and details still take up their space, so the window doesn't change size when a result shows up
-        self.scoreLabel = ttk.Label(main, text=" ", style="Score.TLabel")
-        self.scoreLabel.pack()
-        self.detailLabel = ttk.Label(main, text=EMPTY_DETAILS, foreground=NEUTRAL, justify="center")
-        self.detailLabel.pack()
+        self.build_window()
 
         self.root.bind("<space>", self.space_pressed)
         self.root.bind("<Escape>", lambda e: self.back_to_camera())
         self.root.bind("<Control-o>", lambda e: self.pick_photo())
 
-        self.view.config(text="Loading the face model...")
+        self.apply_theme()
+        self.show_message("Loading the face model...")
+        self.reset_result_panel()
+        self.refresh_buttons()
+
+        # Put the window in the middle of the usable screen
+        self.root.update_idletasks()
+        x = areaLeft + max(0, (areaWidth - self.root.winfo_reqwidth()) // 2)
+        y = areaTop + max(0, (areaHeight - self.root.winfo_reqheight() - self.px(WINDOW_FRAME) // 2) // 2)
+        self.root.geometry(f"+{x}+{y}")
+
         self.root.after(50, self.start)
+        self.root.after(THEME_CHECK_DELAY, self.check_theme)
+
+    # ---------- Building the window ----------
+
+    def px(self, size):
+        # A size at 100% screen scaling, made as big as it should be on this screen
+        return round(size * self.scale)
+
+    def work_area(self):
+        # Where windows can go: (left, top, width, height) of the screen without the taskbar, in pixels
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                rect = wintypes.RECT()
+                # 0x30 is SPI_GETWORKAREA
+                if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rect), 0):
+                    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+            except Exception:
+                pass
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight() - self.px(48)
+
+    def make_fonts(self):
+        # Windows 11 has "Segoe UI Variable", older Windows has "Segoe UI". Tk cuts long font names at 31 letters
+        have = set(tkFont.families(self.root))
+
+        def pick(*names):
+            return next((name for name in names if name in have), "Segoe UI")
+
+        text = pick("Segoe UI Variable Text", "Segoe UI")
+        textBold = pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold", "Segoe UI")
+        display = pick("Segoe UI Variable Display Semib", "Segoe UI Semibold", "Segoe UI")
+        displayLight = pick("Segoe UI Variable Display Semil", "Segoe UI Semilight", "Segoe UI")
+        self.fonts = {
+            "title": tkFont.Font(root=self.root, family=display, size=19),
+            "score": tkFont.Font(root=self.root, family=displayLight, size=52),
+            "scoreUnit": tkFont.Font(root=self.root, family=display, size=18),
+            "body": tkFont.Font(root=self.root, family=text, size=11),
+            "bodyBold": tkFont.Font(root=self.root, family=textBold, size=11),
+            "button": tkFont.Font(root=self.root, family=text, size=11),
+            "buttonBold": tkFont.Font(root=self.root, family=textBold, size=11),
+            "small": tkFont.Font(root=self.root, family=text, size=10),
+            "tiny": tkFont.Font(root=self.root, family=text, size=9),
+            "message": tkFont.Font(root=self.root, family=text, size=13),
+        }
+
+    def make_corner_mask(self):
+        # Used to round the corners of the big picture: white where the picture is, black in the corners
+        size = (self.viewW * SMOOTHING, self.viewH * SMOOTHING)
+        mask = Image.new("L", size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=self.px(16) * SMOOTHING, fill=255)
+        self.cornerMask = mask.resize((self.viewW, self.viewH), Image.Resampling.LANCZOS)
+
+    def themed_widget(self, widget, **options):
+        # Remembers which colour name each option of the widget uses, so the colours can change with the theme
+        self.themed.append((widget, options))
+        return widget
+
+    def label(self, parent, text, font, colour="text", **options):
+        label = tk.Label(parent, text=text, font=self.fonts[font], bd=0, padx=0, pady=0, takefocus=0, **options)
+        return self.themed_widget(label, bg="bg", fg=colour)
+
+    def build_window(self):
+        px = self.px
+        main = self.themed_widget(tk.Frame(self.root), bg="bg")
+        main.pack(padx=px(PAD), pady=px(PAD))
+        self.themed_widget(self.root, bg="bg")
+
+        # Left: the picture, with the status pill under it
+        left = self.themed_widget(tk.Frame(main), bg="bg")
+        left.grid(row=0, column=0, sticky="n")
+        # The picture has no border or padding, otherwise a few pixels of it are cut off at each side
+        self.view = tk.Label(left, bd=0, padx=0, pady=0, highlightthickness=0, compound="center", justify="center",
+                             font=self.fonts["message"], takefocus=0)
+        self.themed_widget(self.view, bg="bg", fg="muted")
+        self.view.pack()
+        self.statusPill = StatusPill(left, self, self.viewW, px(STATUS_ROW))
+        self.statusPill.pack()
+
+        # Right: title, model face choice, score and buttons
+        right = self.themed_widget(tk.Frame(main), bg="bg")
+        right.grid(row=0, column=1, sticky="ns", padx=(px(PAD), 0))
+        panelW = px(PANEL_WIDTH)
+
+        # The buttons are packed first so they stick to the bottom, the rest fills from the top
+        self.hintLabel = self.label(right, "Space takes a photo  ·  Esc goes back", "tiny", "muted")
+        self.hintLabel.pack(side="bottom", pady=(px(10), 0))
+        self.pickButton = RoundButton(right, self, "Pick a photo…", self.pick_photo, False, panelW, px(44))
+        self.pickButton.pack(side="bottom", pady=(px(10), 0))
+        self.pickButton.set_enabled(False)
+        self.takeButton = RoundButton(right, self, "Take photo", self.primary_clicked, True, panelW, px(48))
+        self.takeButton.pack(side="bottom")
+        self.customWidgets = [self.pickButton, self.takeButton]
+
+        self.label(right, "Face Rater", "title", anchor="w").pack(anchor="w")
+
+        self.label(right, "Compare with the model face of a", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
+        self.gender = tk.StringVar(value="boy")
+        self.genderToggle = Segmented(right, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
+                                      self.gender_changed, panelW, px(40))
+        self.genderToggle.pack()
+        self.customWidgets.append(self.genderToggle)
+
+        self.label(right, "Beauty score", "small", "muted", anchor="w").pack(anchor="w", pady=(px(22), 0))
+        scoreRow = self.themed_widget(tk.Frame(right), bg="bg")
+        scoreRow.pack(fill="x")
+        # The digits of this font are all equally wide, so the "/ 10" next to the number stays in place while it counts
+        self.scoreLabel = self.label(scoreRow, EMPTY_SCORE, "score", "faint")
+        self.scoreLabel.pack(side="left")
+        self.scoreUnit = self.label(scoreRow, "/ 10", "scoreUnit", "faint")
+        self.scoreUnit.pack(side="left", anchor="s", padx=(self.px(10), 0), pady=(0, self.px(12)))
+
+        self.clarityRow = self.make_stat_row(right, "Skin clarity", panelW)
+        self.symmetryRow = self.make_stat_row(right, "Symmetry", panelW)
+
+        # The text under the stats, always this many lines high
+        self.caption = tk.Label(right, text="", font=self.fonts["tiny"], justify="left", anchor="nw", bd=0, padx=0, pady=0,
+                                wraplength=panelW, height=CAPTION_LINES, takefocus=0)
+        self.themed_widget(self.caption, bg="bg", fg="muted")
+        self.caption.pack(fill="x", pady=(px(14), 0))
+
+    def make_stat_row(self, parent, name, panelW):
+        # A name on the left, the percentage on the right and a bar under them
+        frame = self.themed_widget(tk.Frame(parent), bg="bg")
+        frame.pack(fill="x", pady=(self.px(16), 0))
+        frame.columnconfigure(0, weight=1)
+        nameLabel = self.label(frame, name, "body", "text", anchor="w")
+        nameLabel.grid(row=0, column=0, sticky="w")
+        valueLabel = self.label(frame, "–", "bodyBold", "muted", anchor="e")
+        valueLabel.grid(row=0, column=1, sticky="e")
+        bar = Bar(frame, self, panelW, self.px(6))
+        bar.grid(row=1, column=0, columnspan=2, sticky="w", pady=(self.px(8), 0))
+        self.customWidgets.append(bar)
+        return {"value": valueLabel, "bar": bar}
+
+    # ---------- Colours ----------
+
+    def apply_theme(self):
+        # Gives every widget the colours of the current light or dark theme
+        c = self.colors
+        for widget, options in self.themed:
+            widget.config(**{option: c[name] for option, name in options.items()})
+        for widget in self.customWidgets:
+            widget.restyle()
+        self.statusPill.restyle()
+        self.color_score(self.scoreActive)
+        if self.lastPicture is not None:
+            self.show_picture(self.lastPicture)
+        else:
+            self.redraw_message()
+        self.style_title_bar()
+
+    def check_theme(self):
+        dark = windows_uses_dark_mode()
+        if dark != self.dark:
+            self.dark = dark
+            self.colors = DARK if dark else LIGHT
+            self.apply_theme()
+        self.root.after(THEME_CHECK_DELAY, self.check_theme)
+
+    def style_title_bar(self):
+        # Makes the title bar match the theme (dark mode needs Windows 10 version 2004 or newer, the colour
+        # needs Windows 11). On anything older Windows just ignores it
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            self.root.update_idletasks()
+            window = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            dark = ctypes.c_int(1 if self.dark else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(window, 20, ctypes.byref(dark), 4)
+            red, green, blue = ImageColor.getrgb(self.colors["bg"])
+            colour = ctypes.c_int(red | green << 8 | blue << 16)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(window, 35, ctypes.byref(colour), 4)
+        except Exception:
+            pass
 
     # ---------- Starting and closing ----------
 
@@ -180,8 +601,8 @@ class FaceRaterApp:
             messagebox.showerror("AI Face Rater", str(e))
             self.root.destroy()
             return
-        self.pickButton.config(state="normal")
-        self.view.config(text="Starting the camera...")
+        self.pickButton.set_enabled(True)
+        self.show_message("Starting the camera...")
         self.camera = Camera(CAMERA_INDEX)
         self.update_preview()
 
@@ -195,14 +616,12 @@ class FaceRaterApp:
     def update_preview(self):
         if self.mode == "camera":
             if self.camera.opened is False:
-                self.view.config(image="", text="No camera found.\nUse \"Pick a photo...\" instead.")
-                self.photo = None
-                self.takeButton.config(state="disabled")
+                self.show_message("No camera found.\nUse \"Pick a photo…\" instead.")
+                self.set_can_take_photo(False)
                 self.set_status("", NEUTRAL)
             elif self.camera.lost():
-                self.view.config(image="", text="Camera disconnected.\nPlug it back in, or use \"Pick a photo...\".")
-                self.photo = None
-                self.takeButton.config(state="disabled")
+                self.show_message("Camera disconnected.\nPlug it back in, or use \"Pick a photo…\".")
+                self.set_can_take_photo(False)
                 self.set_status("Camera disconnected.", BAD)
             else:
                 frame = self.camera.latest()
@@ -213,37 +632,23 @@ class FaceRaterApp:
     def show_preview_frame(self, frame):
         # Mirror it, so moving your head to the left moves it to the left on the screen, like a mirror
         frame = cv2.flip(frame, 1)
-        self.takeButton.config(state="normal")
+        self.set_can_take_photo(True)
 
         h, w = frame.shape[:2]
         found = ld.landmark_detect(frame, detectScale=min(1.0, PREVIEW_DETECT_WIDTH / w))
         if found is None:
-            self.set_status("No face found. Face the camera!", BAD)
-            banner = "FACE THE CAMERA"
+            self.set_status("No face found. Face the camera!", WARN)
         else:
             xList, yList = found
             problem = ld.facing_problem(xList, yList, frame.shape)
             if problem is None:
-                self.set_status("Looking good! Press \"Take photo\" (or Space).", GOOD)
-                banner = None
+                self.set_status("Looking good! Press Take photo or Space.", GOOD)
                 color = (80, 200, 80)
             else:
-                self.set_status(f"Face the camera! You are facing {problem}.", BAD)
-                banner = "FACE THE CAMERA"
-                color = (60, 60, 230)
+                self.set_status(f"Face the camera! You are facing {problem}.", WARN)
+                color = (40, 160, 245)
             for x, y in zip(xList, yList):
                 cv2.circle(frame, (int(x), int(y)), 2, color, -1)
-
-        if banner is not None:
-            # A see-through red bar at the top of the picture, so you see it while looking at the camera
-            barH = max(30, h // 9)
-            bar = frame[:barH].copy()
-            bar[:] = (40, 40, 200)
-            frame[:barH] = cv2.addWeighted(frame[:barH], 0.35, bar, 0.65, 0)
-            scale = barH / 45
-            (textW, textH), _ = cv2.getTextSize(banner, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
-            cv2.putText(frame, banner, ((w - textW) // 2, (barH + textH) // 2), cv2.FONT_HERSHEY_SIMPLEX,
-                        scale, (255, 255, 255), 2, cv2.LINE_AA)
 
         self.show_picture(frame)
 
@@ -259,8 +664,15 @@ class FaceRaterApp:
         # same way round as other people see it). It's only shown mirrored, like the preview
         self.rate(frame, mirrored=True)
 
+    def primary_clicked(self):
+        # The big button takes a photo, or after a result it goes back to the camera
+        if self.mode == "result":
+            self.back_to_camera()
+        else:
+            self.take_photo()
+
     def pick_photo(self):
-        if str(self.pickButton["state"]) == "disabled":
+        if not self.pickButton.enabled:
             return
         path = filedialog.askopenfilename(
             title="Pick a photo of a face",
@@ -284,11 +696,9 @@ class FaceRaterApp:
         self.mode = "result"
         self.currentPicture = picture
         self.currentMirrored = mirrored
-        self.backButton.pack(side="left", padx=4)
-        self.takeButton.config(state="disabled")
+        self.refresh_buttons()
         self.stop_animation()
-        self.scoreLabel.config(text=" ")
-        self.detailLabel.config(text=EMPTY_DETAILS)
+        self.reset_result_panel()
         self.show_picture(cv2.flip(picture, 1) if mirrored else picture)
         self.set_status("Rating...", NEUTRAL)
         self.root.update_idletasks()
@@ -297,7 +707,7 @@ class FaceRaterApp:
             result = ld.rate_face(picture, self.gender.get())
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
-            self.detailLabel.config(text="Take a new photo, or pick another one." + EMPTY_DETAILS)
+            self.caption.config(text="Take a new photo, or pick another one.")
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
@@ -305,23 +715,27 @@ class FaceRaterApp:
 
         clarity = result["clarity"]
         if clarity is None:
-            skinText = ("Could not judge the cheeks (hidden, covered by a beard or a black-and-white photo), "
-                        "so skin clarity is not counted.")
+            self.clarityRow["value"].config(text="Not counted", fg=self.colors["muted"])
+            self.clarityRow["bar"].set_value(None)
+            note = "\n\nCheeks hidden, bearded or black-and-white, so skin clarity is not counted."
         else:
-            skinText = f"Skin clarity on the cheeks: {round(clarity * 100)}%  (score x{result['skinFactor']:.2f})"
-        symmetryText = f"Symmetry: {round(result['symmetry'] * 100)}%  (score x{result['symmetryFactor']:.2f})"
-        self.detailLabel.config(text=skinText + "\n" + symmetryText + "\nGreen dots: landmarks   "
-                                     "Blue squares: cheeks checked   Red: uneven skin")
+            self.clarityRow["value"].config(text=f"{round(clarity * 100)}%", fg=self.colors["text"])
+            self.clarityRow["bar"].set_value(clarity)
+            note = ""
+        self.symmetryRow["value"].config(text=f"{round(result['symmetry'] * 100)}%", fg=self.colors["text"])
+        self.symmetryRow["bar"].set_value(result["symmetry"])
+        self.caption.config(text=LEGEND_TEXT + note)
         self.animate_score(result["score"])
 
     def animate_score(self, score, duration=1.5):
         # Count up to the score, like the terminal version did
         start = time.perf_counter()
+        self.color_score(True)
 
         def step():
             t = min((time.perf_counter() - start) / duration, 1.0)
             shown = score * (1 - (1 - t) ** 3)  # slows down towards the end
-            self.scoreLabel.config(text=f"Beauty score: {shown:.1f} / 10")
+            self.scoreLabel.config(text=f"{shown:.1f}")
             self.animation = self.root.after(16, step) if t < 1.0 else None
 
         step()
@@ -337,10 +751,39 @@ class FaceRaterApp:
         self.stop_animation()
         self.mode = "camera"
         self.currentPicture = None
-        self.backButton.pack_forget()
-        self.scoreLabel.config(text=" ")
-        self.detailLabel.config(text=EMPTY_DETAILS)
+        self.refresh_buttons()
+        self.reset_result_panel()
         self.set_status("", NEUTRAL)
+
+    # ---------- Score panel ----------
+
+    def color_score(self, active):
+        # The score is dark when there is one, and faded while there isn't
+        self.scoreActive = active
+        self.scoreLabel.config(fg=self.colors["text"] if active else self.colors["faint"])
+        self.scoreUnit.config(fg=self.colors["muted"] if active else self.colors["faint"])
+
+    def reset_result_panel(self):
+        # Empty score and stats still take up their space, so the window doesn't change size when a result shows up
+        self.scoreLabel.config(text=EMPTY_SCORE)
+        self.color_score(False)
+        for row in (self.clarityRow, self.symmetryRow):
+            row["value"].config(text="–", fg=self.colors["muted"])
+            row["bar"].set_value(None)
+        self.caption.config(text=TIP_TEXT if self.mode == "camera" else "")
+
+    def refresh_buttons(self):
+        if self.mode == "result":
+            self.takeButton.set_text("Back to camera")
+            self.takeButton.set_enabled(True)
+        else:
+            self.takeButton.set_text("Take photo")
+            self.takeButton.set_enabled(self.canTakePhoto)
+
+    def set_can_take_photo(self, can):
+        if can != self.canTakePhoto:
+            self.canTakePhoto = can
+            self.refresh_buttons()
 
     # ---------- Helpers ----------
 
@@ -349,18 +792,41 @@ class FaceRaterApp:
         # Stop here, so Space doesn't also do anything else
         return "break"
 
-    def set_status(self, text, color):
-        if self.status.cget("text") != text:
-            self.status.config(text=text, fg=color)
+    def set_status(self, text, kind):
+        self.statusPill.show(text, kind)
+
+    def stage(self, bgrPicture):
+        # The big picture area as a PIL image: the picture scaled to fit (keeping its shape) on a calm background,
+        # with rounded corners
+        stage = Image.new("RGB", (self.viewW, self.viewH), self.colors["stage"])
+        if bgrPicture is not None:
+            h, w = bgrPicture.shape[:2]
+            shrink = min(self.viewW / w, self.viewH / h)
+            size = (max(1, int(w * shrink)), max(1, int(h * shrink)))
+            resized = cv2.resize(bgrPicture, size, interpolation=cv2.INTER_AREA if shrink < 1 else cv2.INTER_LINEAR)
+            stage.paste(Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)),
+                        ((self.viewW - size[0]) // 2, (self.viewH - size[1]) // 2))
+        # The corners get the window's colour
+        corners = Image.new("RGB", (self.viewW, self.viewH), self.colors["bg"])
+        return Image.composite(stage, corners, self.cornerMask)
 
     def show_picture(self, bgrPicture):
-        # Scale the picture to fit the picture area, keeping its shape
-        h, w = bgrPicture.shape[:2]
-        shrink = min(self.viewW / w, self.viewH / h)
-        size = (max(1, int(w * shrink)), max(1, int(h * shrink)))
-        resized = cv2.resize(bgrPicture, size, interpolation=cv2.INTER_AREA if shrink < 1 else cv2.INTER_LINEAR)
-        self.photo = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
+        self.lastPicture = bgrPicture
+        self.message = None
+        self.photo = ImageTk.PhotoImage(self.stage(bgrPicture))
         self.view.config(image=self.photo, text="")
+
+    def show_message(self, text):
+        # Text in the picture area instead of a picture ("Loading...", "No camera found.")
+        if self.message == text and self.lastPicture is None:
+            return
+        self.lastPicture = None
+        self.message = text
+        self.redraw_message()
+
+    def redraw_message(self):
+        self.photo = ImageTk.PhotoImage(self.stage(None))
+        self.view.config(image=self.photo, text=self.message or "")
 
 
 def main():
