@@ -1,5 +1,4 @@
 dlib>=19.24
 opencv-python>=4.8
 numpy>=1.26
-matplotlib>=3.8
 pillow>=9.1
