@@ -68,7 +68,7 @@ DARK = {
 }
 
 # What the score shows (faded) when there is no score yet. A dash can't be mistaken for a real score of 0
-EMPTY_SCORE = "\u2013.\u2013"
+EMPTY_SCORE = "\u2013"
 TIP_TEXT = "Look straight at the camera."
 NO_CAMERA_TEXT = "Pick a photo to get started."
 # The hint above the buttons is always this many lines high, so the window doesn't change size when it changes
@@ -781,7 +781,7 @@ class FaceRaterApp:
             result = ld.rate_face(picture, self.gender.get())
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
-            self.set_hint("Back to camera and try again, or pick another photo.")
+            self.set_hint("Try again, or pick another photo.")
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
