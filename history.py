@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 
 HISTORY_FILE = "history.csv"
 COLUMNS = ["time", "model", "score", "clarity", "symmetry", "source"]
-MODELS = ("boy", "girl", "average")
+# The model faces a rating can be for. Rows for any other (like "average", a model face that was removed) are skipped
+MODELS = ("boy", "girl")
 # The up/down arrow only shows when the score is at least this far from your previous photo's score
 TREND_MIN_DIFF = 0.1
 
@@ -16,7 +17,7 @@ TREND_MIN_DIFF = 0.1
 @dataclass
 class Entry:
     when: datetime
-    model: str  # "boy", "girl" or "average"
+    model: str  # "boy" or "girl"
     score: float
     clarity: float | None
     symmetry: float

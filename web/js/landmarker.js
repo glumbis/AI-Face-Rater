@@ -1,9 +1,10 @@
 // MediaPipe Face Landmarker setup. The library, its WASM files and the model URL all come from config.js (the one
 // place that pins the MediaPipe version).
 import { MP_BUNDLE_URL, MP_WASM_URL, MODEL_URL } from './config.js';
+import { CONST } from './facedata.js';
 
-// Same as MAX_FACES in the desktop app, only the biggest face is used
-const NUM_FACES = 3;
+// MAX_FACES of the desktop app, only the biggest face is used
+const NUM_FACES = CONST.MAX_FACES;
 
 // FaceLandmarker's connection sets ({start, end} pairs), filled in once the library has loaded. overlay.js reads this.
 export const connections = {};

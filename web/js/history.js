@@ -3,7 +3,8 @@
 // unavailable or full storage (private mode, blocked site data) never breaks the app; the history then lives in
 // memory until the page is closed.
 
-export const MODELS = ['boy', 'girl', 'average'];
+// The model faces a rating can be for. Saved rows for any other (like "average", a model face that was removed) are skipped
+export const MODELS = ['boy', 'girl'];
 // The up/down arrow only shows when the score is at least this far from your previous photo's score (history.TREND_MIN_DIFF)
 export const TREND_MIN_DIFF = 0.1;
 

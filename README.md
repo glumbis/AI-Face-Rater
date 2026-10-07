@@ -1,6 +1,6 @@
 # AI Face Rater
 
-Rates a face by comparing its landmarks (MediaPipe Face Landmarker) with a model face.
+Rates a face by comparing its landmarks (MediaPipe Face Landmarker) with a few model faces.
 
 **Try it in the browser, no install: https://glumbis.github.io/AI-Face-Rater/**. Everything runs on your device and no photo is uploaded. The website is in `web/` (see `web/FEATURES.md`) and deploys to GitHub Pages on every push to main.
 
@@ -35,7 +35,7 @@ The remaining difference, measured relative to the distance between the eyes, is
 
 Uneven skin on the cheeks and a lopsided face (found by comparing the face with its own mirror image) add a small penalty (very uneven skin takes about a quarter off a score of 5). Only the tint of the skin is compared, so shadows don't count, and stubble, beards and black-and-white photos are not counted as uneven skin. The head must roughly face the camera: a picture is refused when the head is turned more than `MAX_TURN` (12) degrees to the side or tilted more than `MAX_TILT` (25) degrees up or down (both in `headpose.py`), and the live tip comes at 8 and 18 degrees (`HINT_TURN`, `HINT_TILT`). The face must also be close enough: a camera picture is refused when the face (forehead to chin) is under `MIN_FACE_SIZE` (30%) of the picture's height (about 60 cm from a laptop webcam), with a live tip under `HINT_FACE_SIZE` (35%); a picked photo only needs `MIN_FACE_SIZE_FILE` (15%) of its shorter side, so a group photo with tiny faces is refused (all in `landmarkdetect.py`).
 
-On the result picture, the landmarks are mint dots, the checked cheek squares are white outlines and uneven spots are soft red.
+On the result picture, thin white lines follow the face outline, brows, eyes, nose and lips (with a few blue accent dots), soft corner brackets mark the checked cheeks and uneven spots are tinted soft red.
 
 The score is just a fun comparison with a few model faces, not a real measure of beauty.
 
