@@ -102,11 +102,20 @@ def landmark_detect(img, detectScale=1.0):
     return xList, yList
 
 
+# Colours of what is drawn on the rated picture (blue, green, red order, like all OpenCV colours)
+MINT = (128, 222, 74)  # landmark dots, #4ADE80
+SOFT_WHITE = (240, 240, 240)  # outline of the cheek squares
+SOFT_RED = (113, 113, 248)  # uneven skin, #F87171
+
+
 def draw_landmarks(img, xList, yList):
     # Dot size follows the picture size, so the dots are visible on big photos and not huge on small ones
     radius = max(2, round(max(img.shape[:2]) / 250))
+    # Soft mint dots: drawn smooth on a copy, then mixed 75% into the picture so the face still shows through
+    dots = img.copy()
     for x, y in zip(xList, yList):
-        cv2.circle(img=img, center=(int(x), int(y)), radius=radius, color=(0, 255, 0), thickness=-1)
+        cv2.circle(img=dots, center=(int(x), int(y)), radius=radius, color=MINT, thickness=-1, lineType=cv2.LINE_AA)
+    cv2.addWeighted(dots, 0.75, img, 0.25, 0, dst=img)
 
 
 # ---------- Head direction ----------
@@ -308,8 +317,14 @@ def skin_clarity(img, drawOn, xList, yList):
 
         x1, y1 = max(square[0], 0), max(square[1], 0)
         region = drawOn[y1:y1 + mask.shape[0], x1:x1 + mask.shape[1]]
-        region[mask == 1] = (0, 0, 255)
-        cv2.rectangle(drawOn, square[:2], square[2:], color=(255, 0, 0), thickness=2)
+        # Uneven spots in a soft red, mixed 60% into the skin so the skin still shows through
+        spots = mask == 1
+        region[spots] = (region[spots] * 0.4 + np.array(SOFT_RED) * 0.6).astype(np.uint8)
+        # A faint dark outline behind the white one, so the square also shows on pale skin
+        shadow = drawOn.copy()
+        cv2.rectangle(shadow, square[:2], square[2:], color=(30, 30, 30), thickness=4, lineType=cv2.LINE_AA)
+        cv2.addWeighted(shadow, 0.35, drawOn, 0.65, 0, dst=drawOn)
+        cv2.rectangle(drawOn, square[:2], square[2:], color=SOFT_WHITE, thickness=2, lineType=cv2.LINE_AA)
 
     if not fractions:
         return None
