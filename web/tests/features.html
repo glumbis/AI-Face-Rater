@@ -214,14 +214,14 @@ await test('best, average, count and trend against the PREVIOUS photo', () => {
   let s = history.stats('boy', NOW);
   eq([s.best, s.average, s.count, s.trend], [7, 6.5, 2, 'up']);
   near(s.diff, 1, 1e-9);
-  rate('boy', 7.05, { now: at(15, 11) });         // 0.05 above the previous 7.0: no arrow
+  rate('boy', 7.04, { now: at(15, 11) });         // shown as 7.0, like the previous 7.0: no arrow
   s = history.stats('boy', NOW);
-  eq([s.best, s.count, s.trend], [7.05, 3, null]);
-  rate('boy', 5.0, { now: at(15, 12) });          // 2.05 below the previous 7.05 (the average is not used)
+  eq([s.best, s.count, s.trend], [7.04, 3, null]);
+  rate('boy', 5.0, { now: at(15, 12) });          // 2.0 below the previous 7.0 as shown (the average is not used)
   s = history.stats('boy', NOW);
   eq([s.trend, s.count], ['down', 4]);
-  near(s.average, 6.2625, 1e-9);
-  near(s.diff, -2.05, 1e-9);
+  near(s.average, 6.26, 1e-9);
+  near(s.diff, -2, 1e-9);
 });
 await test('trend needs a difference of 0.1 from the previous photo, like Python', () => {
   fresh();
@@ -230,12 +230,26 @@ await test('trend needs a difference of 0.1 from the previous photo, like Python
   eq(history.stats('girl', NOW).trend, 'up');
   fresh();
   rate('girl', 5.0, { now: at(15, 9) });
-  rate('girl', 5.06, { now: at(15, 10) });
+  rate('girl', 5.04, { now: at(15, 10) });
   eq(history.stats('girl', NOW).trend, null);
   fresh();
   rate('girl', 5.0, { now: at(15, 9) });
   rate('girl', 4.875, { now: at(15, 10) });
   eq(history.stats('girl', NOW).trend, 'down');
+});
+await test('trend and diff use the shown one-decimal scores, like Python', () => {
+  fresh();
+  rate('boy', 7.04, { now: at(15, 9) });
+  rate('boy', 7.16, { now: at(15, 10) });          // shown 7.0 -> 7.2: 0.2, not 0.12
+  let s = history.stats('boy', NOW);
+  eq([s.trend, s.diff], ['up', 0.2]);
+  rate('boy', 7.13, { now: at(15, 11) });          // shown 7.2 -> 7.1: down, although only 0.03 apart
+  s = history.stats('boy', NOW);
+  eq([s.trend, s.diff], ['down', -0.1]);
+  fresh();
+  rate('boy', 7.0, { now: at(15, 9) });
+  rate('boy', 7.1, { now: at(15, 10) });           // 7.1 - 7.0 is a hair under 0.1 in floating point
+  eq(history.stats('boy', NOW).trend, 'up');
 });
 await test('each reference has its own numbers; the streak counts all of them', () => {
   fresh();

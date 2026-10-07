@@ -64,10 +64,23 @@ def test_compare_best_average_and_trend(tmp_path):
     assert abs(up["diff"] - 0.5) < 1e-9
     down = history.compare(before, "boy", 7.0)
     assert down["trend"] == "down" and abs(down["diff"] + 1.0) < 1e-9
-    assert history.compare(before, "boy", 8.05)["trend"] is None
-    assert history.compare(before, "boy", 7.95)["trend"] is None
+    assert history.compare(before, "boy", 8.04)["trend"] is None  # shown as 8.0, like the previous photo
+    assert history.compare(before, "boy", 7.96)["trend"] is None
     assert history.compare([], "boy", 7.0) is None
     assert history.compare(before, "girl", 3.0)["count"] == 2
+
+
+def test_arrow_uses_the_shown_one_decimal_scores(tmp_path):
+    add(tmp_path, "boy", 7.04)
+    before = history.load(str(tmp_path))
+    # 7.04 -> 7.16 is shown as 7.0 -> 7.2: the arrow says 0.2, not 0.1
+    assert history.compare(before, "boy", 7.16)["diff"] == 0.2
+    # 7.04 -> 7.13 is shown as 7.0 -> 7.1: an arrow, although the scores are less than 0.1 apart
+    assert history.compare(before, "boy", 7.13)["trend"] == "up"
+    # 7.04 -> 6.96 is shown as 7.0 -> 7.0: no arrow
+    assert history.compare(before, "boy", 6.96)["trend"] is None
+    # 7.0 -> 7.1 is up, although 7.1 - 7.0 is a hair under 0.1 in floating point
+    assert history.compare([history.Entry(datetime(2026, 5, 20), "boy", 7.0, None, 0.9, "file")], "boy", 7.1)["trend"] == "up"
 
 
 def test_arrow_compares_with_the_previous_photo_of_the_same_model_face(tmp_path):

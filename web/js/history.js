@@ -70,6 +70,8 @@ function write(list) {
 }
 
 const round3 = (v) => Math.round(v * 1000) / 1000;
+// A score as the page shows it, with one decimal (toFixed, like fmt in app.js)
+const shown = (v) => Number(v.toFixed(1));
 
 // Adds one rating: {reference, score, clarity, symmetry, source, pictureId?, now?}. clarity may be null (not counted).
 // The same picture rated again against the same reference is saved once: give the same pictureId for one picture
@@ -115,7 +117,8 @@ function streakOf(list, now) {
 
 // How the latest rating of a reference looks next to the earlier ones (history.compare and history.streak):
 // {best, average, count} include the latest rating, trend is "up", "down" or null against the PREVIOUS photo, the
-// rating before the latest one (diff is the difference), streak counts days over all references. With a single
+// rating before the latest one (diff is the difference of the scores as shown, with one decimal, so 7.04 -> 7.16
+// is 7.0 -> 7.2, a difference of 0.2), streak counts days over all references. With a single
 // rating there is nothing to compare with (count is 1: show no best/average line then, like the desktop app). With
 // no rating at all: best and average are null and count is 0.
 export function stats(reference, now = Date.now()) {
@@ -125,7 +128,7 @@ export function stats(reference, now = Date.now()) {
   if (!scores.length) return { best: null, average: null, count: 0, trend: null, diff: 0, streak };
   let trend = null, diff = 0;
   if (scores.length >= 2) {
-    diff = scores[scores.length - 1] - scores[scores.length - 2];
+    diff = shown(shown(scores[scores.length - 1]) - shown(scores[scores.length - 2]));
     trend = diff >= TREND_MIN_DIFF ? 'up' : diff <= -TREND_MIN_DIFF ? 'down' : null;
   }
   return { best: Math.max(...scores), average: scores.reduce((a, b) => a + b, 0) / scores.length,
