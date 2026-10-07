@@ -28,6 +28,8 @@ GOOD = "#1a7f37"
 BAD = "#c62828"
 NEUTRAL = "#555555"
 
+# The details under the score are three lines (skin clarity, symmetry, colour key), empty lines keep their space
+EMPTY_DETAILS = "\n\n"
 
 class Camera:
     # Reads frames from the camera in the background, so the window doesn't freeze while waiting for the next one
@@ -132,7 +134,7 @@ class FaceRaterApp:
         # Empty score and details still take up their space, so the window doesn't change size when a result shows up
         self.scoreLabel = ttk.Label(main, text=" ", style="Score.TLabel")
         self.scoreLabel.pack()
-        self.detailLabel = ttk.Label(main, text="\n", foreground=NEUTRAL, justify="center")
+        self.detailLabel = ttk.Label(main, text=EMPTY_DETAILS, foreground=NEUTRAL, justify="center")
         self.detailLabel.pack()
 
         self.root.bind("<space>", lambda e: self.take_photo())
@@ -251,7 +253,7 @@ class FaceRaterApp:
         self.takeButton.config(state="disabled")
         self.stop_animation()
         self.scoreLabel.config(text=" ")
-        self.detailLabel.config(text="\n")
+        self.detailLabel.config(text=EMPTY_DETAILS)
         self.show_picture(picture)
         self.set_status("Rating...", NEUTRAL)
         self.root.update_idletasks()
@@ -260,7 +262,7 @@ class FaceRaterApp:
             result = ld.rate_face(picture, self.gender.get())
         except ld.FaceError as e:
             self.set_status(str(e), BAD)
-            self.detailLabel.config(text="Take a new photo, or pick another one.\n")
+            self.detailLabel.config(text="Take a new photo, or pick another one." + EMPTY_DETAILS)
             return
 
         self.show_picture(result["picture"])
@@ -268,11 +270,12 @@ class FaceRaterApp:
 
         clarity = result["clarity"]
         if clarity is None:
-            skinText = "Could not see the cheeks, so skin clarity is not counted."
+            skinText = "Could not see the cheeks (or they are covered by a beard), so skin clarity is not counted."
         else:
             skinText = f"Skin clarity on the cheeks: {round(clarity * 100)}%  (score x{result['skinFactor']:.2f})"
-        self.detailLabel.config(text=skinText + "\nGreen dots: landmarks   Blue squares: cheeks checked   "
-                                                 "Red: uneven skin")
+        symmetryText = f"Symmetry: {round(result['symmetry'] * 100)}%  (score x{result['symmetryFactor']:.2f})"
+        self.detailLabel.config(text=skinText + "\n" + symmetryText + "\nGreen dots: landmarks   "
+                                     "Blue squares: cheeks checked   Red: uneven skin")
         self.animate_score(result["score"])
 
     def animate_score(self, score, duration=1.5):
@@ -282,7 +285,7 @@ class FaceRaterApp:
         def step():
             t = min((time.perf_counter() - start) / duration, 1.0)
             shown = score * (1 - (1 - t) ** 3)  # slows down towards the end
-            self.scoreLabel.config(text=f"Beauty score: {shown:,.1f}")
+            self.scoreLabel.config(text=f"Beauty score: {shown:.1f} / 10")
             self.animation = self.root.after(16, step) if t < 1.0 else None
 
         step()
@@ -300,7 +303,7 @@ class FaceRaterApp:
         self.currentPicture = None
         self.backButton.pack_forget()
         self.scoreLabel.config(text=" ")
-        self.detailLabel.config(text="\n")
+        self.detailLabel.config(text=EMPTY_DETAILS)
         self.set_status("", NEUTRAL)
 
     # ---------- Helpers ----------
