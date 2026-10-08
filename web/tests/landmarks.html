@@ -24,7 +24,7 @@ window.dump = async ({ photo = 'perBoy', version = MP_VERSION, delegate = 'CPU',
   const { mp, fileset } = await lib(version);
   const lm = await mp.FaceLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetBuffer: (await model()).slice(), delegate },
-    runningMode: mode, numFaces: 3, outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
+    runningMode: mode, numFaces: 3, outputFacialTransformationMatrixes: true, outputFaceBlendshapes: true,
   });
   const img = new Image();
   img.src = `../../${photo}.jpg`;
@@ -42,16 +42,17 @@ window.dump = async ({ photo = 'perBoy', version = MP_VERSION, delegate = 'CPU',
   const f = r.faceLandmarks[0];
   const d = r.facialTransformationMatrixes?.[0]?.data;
   const matrix = d ? [0, 1, 2, 3].map((row) => [0, 1, 2, 3].map((col) => d[col * 4 + row])) : null;
-  const out = { w, h, version, delegate, input, matrix, pts: f.map((p) => [p.x * w - 0.5, p.y * h - 0.5]), imageData: g.getImageData(0, 0, w, h) };
+  const out = { w, h, version, delegate, input, matrix, pts: f.map((p) => [p.x * w - 0.5, p.y * h - 0.5, p.z * w]),
+    blendshapes: r.faceBlendshapes?.[0] ? Object.fromEntries(r.faceBlendshapes[0].categories.map((c) => [c.categoryName, c.score])) : null, imageData: g.getImageData(0, 0, w, h) };
   lm.close();
   return out;
 };
 
-// Rates a photo against a model face with the website's scoring on the landmarks of the chosen delegate
+// Rates a photo against the ideal with the website's scoring on the landmarks of the chosen delegate
 import * as scoring from '../js/scoring.js';
 window.rate = async (opts, reference) => {
   const b = await window.dump(opts);
-  const r = scoring.rateFace(b.imageData, b.pts, b.matrix, reference, 'file');
+  const r = scoring.rateFace(b.imageData, b.pts, b.matrix, reference, 'file', b.blendshapes);
   return { score: +r.score.toFixed(3), symmetry: +r.symmetry.toFixed(4), clarity: r.clarity };
 };
 window.ready = true;

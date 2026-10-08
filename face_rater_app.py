@@ -12,6 +12,7 @@ try:
     from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageTk
     import headpose as hp
     import history
+    import idealface
     import landmarkdetect as ld
     import overlay
     import phototips
@@ -582,6 +583,7 @@ class FaceRaterApp:
         self.animation = None
         self.canTakePhoto = False
         self.tracker = hp.HeadTracker()  # steady head angles for the tip in the live preview
+        self.expressionTracker = idealface.ExpressionTracker()  # the same for the "no smile" tip
         self.recent = hp.RecentFrames()  # the last second of pictures, to rate the most frontal one
         self.lastFaceTime = 0.0  # when the live preview last saw a face
         self.sizeProblem = None  # the distance tip showing in the live preview: None, "near" or "far"
@@ -737,7 +739,7 @@ class FaceRaterApp:
         self.aboutButton = RoundButton(titleRow, self, "i", self.show_about, False, px(30), px(30))
         self.aboutButton.grid(row=0, column=1, sticky="e")
         self.customWidgets.append(self.aboutButton)
-        self.label(header, "Compare with the model face", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
+        self.label(header, "Rate against the ideal", "small", "muted", anchor="w").pack(anchor="w", pady=(px(18), px(8)))
         self.gender = tk.StringVar(value="boy")
         self.genderToggle = Segmented(header, self, self.gender, [("Boy", "boy"), ("Girl", "girl")],
                                       self.gender_changed, panelW, px(40))
@@ -774,7 +776,7 @@ class FaceRaterApp:
         statsGroup = group(4, "w")
         self.clarityRow = self.make_stat_row(statsGroup, "Skin clarity", panelW, 0)
         self.symmetryRow = self.make_stat_row(statsGroup, "Symmetry", panelW, px(16))
-        # Which parts of the face are closest to the model face, best first, in one short line. It always takes up
+        # Which parts of the face are closest to the ideal, best first, in one short line. It always takes up
         # its line, so nothing moves when a result shows up
         self.regionLabel = self.label(statsGroup, " ", "tiny", "muted", anchor="w")
         self.regionLabel.pack(anchor="w", pady=(px(8), 0))
@@ -911,12 +913,14 @@ class FaceRaterApp:
         if found is None:
             if now - self.lastFaceTime > FACE_LOST_GRACE:
                 self.tracker.reset()
+                self.expressionTracker.reset()
                 self.sizeProblem = None
                 self.set_status("No face found. Face the camera!", WARN)
         else:
             self.lastFaceTime = now
-            xList, yList, angles = found
+            xList, yList, angles = found.xList, found.yList, found.angles
             problem = None
+            expression = self.expressionTracker.update(found.blendshapes, now)
             # Too far away comes first: it is what to fix first. A picture with the face too small can't be rated,
             # so it isn't kept for Take photo
             size = ld.face_size(xList, yList, frame.shape)
@@ -924,16 +928,19 @@ class FaceRaterApp:
             if angles is not None:
                 # The tip follows the middle of the last few pictures, and Take photo can use any of the recent ones
                 problem = self.tracker.update(*angles, now)
-                if size >= ld.MIN_FACE_SIZE:
+                # A picture with a big smile can't be rated either
+                if size >= ld.MIN_FACE_SIZE and idealface.expression_problem(found.blendshapes) is None:
                     self.recent.add(camera, *angles, now)
             if self.sizeProblem is not None:
                 self.set_status(ld.SIZE_MESSAGES[self.sizeProblem], WARN)
                 color = (40, 160, 245)
-            elif problem is None:
-                self.set_status("Looking good! Press Take photo or Space.", GOOD)
-            else:
+            elif problem is not None:
                 # Only a tip: the button still works
                 self.set_status(hp.HINT_MESSAGES[problem], WARN)
+            elif expression is not None:
+                self.set_status(idealface.EXPRESSION_MESSAGES[expression], WARN)
+            else:
+                self.set_status("Looking good! Press Take photo or Space.", GOOD)
             # Thin lines and a few accent dots, amber while the head is turned (the same style as the result picture)
             overlay.draw_face(frame, xList, yList, turned=problem is not None, preview=True)
 
@@ -954,6 +961,7 @@ class FaceRaterApp:
             frame = best
         self.recent.clear()
         self.tracker.reset()
+        self.expressionTracker.reset()
         # Rate the picture the way the camera took it, like a photo picked from a file (the face is the
         # same way round as other people see it). It's only shown mirrored, like the preview
         self.rate(frame, mirrored=True, source="camera")
@@ -981,7 +989,7 @@ class FaceRaterApp:
         self.rate(picture, source="file")
 
     def gender_changed(self):
-        # Rate the same picture again against the other model face
+        # Rate the same picture again against the other ideal
         if self.mode == "result" and self.currentPicture is not None:
             self.rate(self.currentPicture, self.currentMirrored, self.currentSource)
 
@@ -1007,11 +1015,7 @@ class FaceRaterApp:
             return
 
         self.show_picture(cv2.flip(result["picture"], 1) if mirrored else result["picture"])
-        # With several model faces of that gender, say which one the face is most like
-        if result["modelFaceCount"] > 1:
-            self.set_status(f"Closest to {result['modelFace']}", NEUTRAL)
-        else:
-            self.set_status(f"Rated against the {self.gender.get()} model", NEUTRAL)
+        self.set_status(f"Rated against the {self.gender.get()} ideal", NEUTRAL)
 
         clarity = result["clarity"]
         skinNote = ""

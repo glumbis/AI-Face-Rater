@@ -1,7 +1,7 @@
 # Which MediaPipe face landmarks the program uses, and the fixed data that goes with them (mirror pairs, weights).
 # The Face Landmarker finds 478 points. 162 of them are enough to describe the shape of the face, so only
 # those are used for rating and drawing. "Left" and "right" are as seen in the picture (the viewer's left).
-# The landmarks of the model faces are in modelfaces.py (made by tools/make_model_faces.py).
+# The proportions the score is based on are measured on all 478 landmarks, in idealface.py.
 # All the lists below are in the order of SUBSET, so number n in a list of landmarks is SUBSET[n] in MediaPipe.
 
 # ---------- The 162 landmarks, by region ----------
@@ -66,7 +66,7 @@ for _a, _b in MIRROR_PAIRS_MEDIAPIPE:
 MIRROR_PAIRS = [position(_partner.get(i, i)) for i in SUBSET]
 
 # ---------- How much each landmark counts ----------
-# How much each region counts, both when lining the face up with the model face and when measuring the difference.
+# How much each region counts when comparing the face with its own mirror image (the symmetry).
 # The jaw line is noisy and moves with hair, beard and head angle, so it counts little. The nose and eyes are
 # found very reliably and are the core of the face's shape, so they count the most. Brows move a bit with
 # expression, so they count a medium amount. The outer lips move a lot when smiling (a small smile would cost
@@ -78,6 +78,3 @@ MIRROR_PAIRS = [position(_partner.get(i, i)) for i in SUBSET]
 REGION_WEIGHTS = {"jaw": 17 * 0.3, "brows": 10 * 0.6, "nose": 9 * 1.0, "eyes": 12 * 1.0,
                   "outerLips": 12 * 0.3, "innerLips": 0.0}
 POINT_WEIGHTS = [REGION_WEIGHTS[name] / len(points) for name, points in REGIONS.items() for _ in points]
-
-# The regions that count, as positions in the 162 lists (the inner lips don't count, so they get no score of their own)
-REGION_POINTS = {name: [position(i) for i in points] for name, points in REGIONS.items() if REGION_WEIGHTS[name] > 0}

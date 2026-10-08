@@ -26,7 +26,7 @@ const MAX_HINT_LINES = 3;
 
 const TIP_TEXT = 'Look straight at the camera.';
 const NO_CAMERA_TEXT = 'Pick a photo to get started.';
-const INTRO_TEXT = 'Take a photo to see how closely your face matches the model face. Nothing leaves your device.';
+const INTRO_TEXT = 'Take a photo to see how closely your face matches the ideal. Nothing leaves your device.';
 const PICTURE_LABEL = 'The rated picture with the face outline drawn on it';
 const NO_FACE_TEXT = 'No face found. Face the camera!';
 const HINT_MESSAGES = {
@@ -39,6 +39,8 @@ const SIZE_MESSAGES = {
   near: 'Move a little closer.',
   far: 'Move closer to the camera.',
 };
+// The tip for a smile or an open mouth (idealface.EXPRESSION_MESSAGES)
+const EXPRESSION_MESSAGES = facedata.IDEAL.EXPRESSION_MESSAGES;
 // A webcam face smaller than this can't be rated, so such frames aren't kept for Take photo
 const { MIN_FACE_SIZE } = facedata.CONST;
 
@@ -256,7 +258,7 @@ function showExtras(scores, newBest) {
 }
 
 function showHistory(st, scores = []) {
-  // A new best: the latest score is higher (as shown) than every earlier one for this model face
+  // A new best: the latest score is higher (as shown) than every earlier one for this ideal
   const prev = scores.slice(0, -1);
   const newBest = prev.length > 0 && Number(fmt(scores[scores.length - 1])) > Number(fmt(Math.max(...prev)));
   showExtras(scores.slice(-SPARK_POINTS), newBest);
@@ -305,8 +307,8 @@ function openAddBoard() {
   if (!current?.result) return;
   el.nickname.value = store.get('afr-nickname') ?? '';
   el.consent.checked = false; // never ticked for them
-  el.addBoardInfo.textContent = `Your score ${fmt(current.result.score)} is for the ${REFERENCE_NAMES[S.reference]} model face. `
-    + 'Submitting again replaces your earlier entry for that model face.';
+  el.addBoardInfo.textContent = `Your score ${fmt(current.result.score)} is for the ${REFERENCE_NAMES[S.reference]} ideal. `
+    + 'Submitting again replaces your earlier entry for that ideal.';
   updateAddBoard();
   el.addBoard.showModal();
 }
@@ -363,7 +365,7 @@ function setupBoard() {
   el.addBoardForm.addEventListener('submit', submitToBoard);
   el.addBoardCancel.addEventListener('click', () => el.addBoard.close());
   el.boardBtn.addEventListener('click', () => {
-    el.boardRef.querySelector(`input[value="${S.reference}"]`).checked = true; // starts on the selected model face
+    el.boardRef.querySelector(`input[value="${S.reference}"]`).checked = true; // starts on the selected ideal
     el.board.showModal();
     showBoard();
   });
@@ -403,6 +405,7 @@ function backToCamera() {
   if (S.mode !== 'result') return;
   current = null;
   headTracker.reset();
+  expressionTracker.reset();
   recent.reset();
   setMode('camera');
   setStatus('');
@@ -458,7 +461,7 @@ async function rateNew(canvas, { mirrored = false, source = 'file' } = {}) {
     const det = await detectSafe(S.image, canvas);
     if (current?.id !== id) return;
     if (!det) throw new scoring.FaceError('No face found. Face the camera with a straight face.');
-    // rateFace refuses a face that is too small or turned too far, with the message to show
+    // rateFace refuses a face that is too small, turned too far or smiling too much, with the message to show
     current.det = det;
     current.angles = headpose.headAngles(det.matrix);
     current.imageData = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
@@ -468,14 +471,14 @@ async function rateNew(canvas, { mirrored = false, source = 'file' } = {}) {
   }
 }
 
-// Rates the current picture against the chosen model face (also when the model face changes)
+// Rates the current picture against the chosen ideal (also when the gender changes)
 function renderResult() {
   const cur = current;
   if (!cur || !cur.det) return;
   const reference = S.reference;
   let result;
   try {
-    result = scoring.rateFace(cur.imageData, cur.det.points478px, cur.det.matrix, reference, cur.source);
+    result = scoring.rateFace(cur.imageData, cur.det.points478px, cur.det.matrix, reference, cur.source, cur.det.blendshapes);
   } catch (e) {
     showError(e, cur.id);
     return;
@@ -483,8 +486,7 @@ function renderResult() {
   cur.failed = false;
   cur.result = result;
   showPicture(cur.canvas, cur.mirrored, cur.det.points478px, result.cheeks);
-  // With several model faces of that gender, say which one the face is most like
-  setStatus(result.modelFaceCount > 1 ? `Closest to ${result.modelFace}` : `Rated against the ${reference} model`, 'neutral');
+  setStatus(`Rated against the ${reference} ideal`, 'neutral');
 
   const clarity = result.clarity ?? null;
   setBar(el.clarityVal, el.clarityBar, clarity, clarity === null ? 'Not counted' : undefined);
@@ -499,7 +501,7 @@ function renderResult() {
   if (clarity === null) lines.push('Skin clarity is not counted: cheeks hidden, bearded or black-and-white.');
   setHint([...lines, ...cur.tips]);
 
-  // Saved once per picture and model face (the same pictureId makes history.js skip a re-rating)
+  // Saved once per picture and ideal (the same pictureId makes history.js skip a re-rating)
   let stats = null, scores = [];
   try {
     history.addRating({ reference, score: result.score, clarity, symmetry: result.symmetry, source: cur.source, pictureId: cur.id });
@@ -564,6 +566,7 @@ function showNotice(text) {
 
 // ---------- Camera ----------
 const headTracker = new headpose.HeadTracker();
+const expressionTracker = new scoring.ExpressionTracker();
 const recent = new headpose.RecentFrames();
 const detectCanvas = document.createElement('canvas');
 const detectCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
@@ -638,6 +641,7 @@ function loop(now) {
   if (!found) {
     if (now - live.lastFace > FACE_LOST_GRACE) {
       headTracker.reset();
+      expressionTracker.reset();
       live.sizeTip = null;
       overlay.clear(overlayCtx);
       setStatus(NO_FACE_TEXT, 'warn');
@@ -653,10 +657,12 @@ function loop(now) {
 
   const angles = headpose.headAngles(found.matrix);
   let hint = null;
+  const expression = expressionTracker.add(found.blendshapes);
   if (angles) {
     headTracker.add(angles);
     hint = headTracker.hint;
-    if (size >= MIN_FACE_SIZE && now - live.lastRecent >= RECENT_INTERVAL) {
+    // A picture with a big smile or an open mouth can't be rated either
+    if (size >= MIN_FACE_SIZE && scoring.expressionProblem(found.blendshapes) === null && now - live.lastRecent >= RECENT_INTERVAL) {
       live.lastRecent = now;
       recent.add(captureFrame(), angles, headpose.sharpness(detectCtx.getImageData(0, 0, dw, dh)));
     }
@@ -665,6 +671,7 @@ function loop(now) {
   let text = 'Looking good! Press Take photo or Space.', kind = 'good';
   if (live.sizeTip) { text = SIZE_MESSAGES[live.sizeTip]; kind = 'warn'; }
   else if (hint) { text = HINT_MESSAGES[hint]; kind = 'warn'; }
+  else if (expression) { text = EXPRESSION_MESSAGES[expression]; kind = 'warn'; }
   setStatus(text, kind);
 
   const sx = vw / dw, sy = vh / dh;
@@ -677,6 +684,7 @@ async function takePhoto() {
   const canvas = recent.best() ?? captureFrame();
   recent.reset();
   headTracker.reset();
+  expressionTracker.reset();
   // Rated the way the camera sent it, and only shown mirrored, like the preview
   await rateNew(canvas, { mirrored: true, source: 'camera' });
 }

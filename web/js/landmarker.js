@@ -74,22 +74,30 @@ function matrixRows(m) {
   return [0, 1, 2, 3].map((r) => [0, 1, 2, 3].map((c) => d[c * 4 + r]));
 }
 
+// MediaPipe's expression measurements of one face as { categoryName: score } (the Python app's blendshapes), or null
+function blendshapesOf(shapes) {
+  const list = shapes?.categories;
+  if (!list?.length) return null;
+  return Object.fromEntries(list.map((c) => [c.categoryName, c.score]));
+}
+
 async function create(mode, delegate, mp, fileset, model) {
   return mp.FaceLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetBuffer: model.slice(), delegate },
     runningMode: mode,
     numFaces: NUM_FACES,
     outputFacialTransformationMatrixes: true,
-    outputFaceBlendshapes: false,
+    outputFaceBlendshapes: true,
   });
 }
 
 // mode is "IMAGE" or "VIDEO". Returns { mode, delegate, detect(source, timestampMs), close() }.
 // IMAGE (rating a still photo) always runs on the CPU: the GPU delegate gives landmarks that are off by about 0.9 % of
-// the eye distance (1.6 px on a 640 px photo), and the model faces and the desktop app's numbers come from the CPU
+// the eye distance (1.6 px on a 640 px photo), and the desktop app's numbers (and the ideal face's targets) come from the CPU
 // path, so the GPU would rate the same photo up to a point lower. VIDEO (the live preview) uses the GPU when there is
 // one, because it only draws the dots and needs the speed.
-// detect gives { points478px: [[x, y, depth] * 478], matrix: 4x4 rows or null } for the biggest face, or null if there is none.
+// detect gives { points478px: [[x, y, depth] * 478], matrix: 4x4 rows or null, blendshapes: { categoryName: score } or null }
+// for the biggest face, or null if there is none.
 // The points are in the pixels of the source: x = x_norm * width - 0.5, like the Python app (depth = z_norm * width).
 // VIDEO mode needs a timestamp in milliseconds that grows with every call.
 export async function createLandmarker(mode, onProgress) {
@@ -140,6 +148,7 @@ export async function createLandmarker(mode, onProgress) {
       return {
         points478px: faces[which].map((p) => [p.x * w - 0.5, p.y * h - 0.5, p.z * w]),
         matrix: matrixRows(result.facialTransformationMatrixes?.[which]),
+        blendshapes: blendshapesOf(result.faceBlendshapes?.[which]),
       };
     },
     close() { landmarker.close(); },

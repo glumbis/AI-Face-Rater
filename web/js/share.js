@@ -12,7 +12,7 @@ const THEMES = {
     track: '#3c3c3c', chip: '#363636', accent: '#60cdff', onAccent: '#000000', low: '#f3c969' },
 };
 const FONT = "'Segoe UI Variable Display', 'Segoe UI Variable', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
-const REFERENCES = { boy: 'Boy model face', girl: 'Girl model face' };
+const REFERENCES = { boy: 'Boy ideal', girl: 'Girl ideal' };
 
 function roundedRect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);

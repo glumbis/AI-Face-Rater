@@ -261,9 +261,20 @@ await test('each reference has its own numbers; the streak counts all of them', 
 await test('rows for the removed "average" model face are skipped and cannot be added', () => {
   const s = fresh();
   s.setItem('afr.history.v1', JSON.stringify([{ t: at(14), r: 'average', s: 7, c: 0.8, y: 0.9, src: 'file' },
-    { t: at(15), r: 'boy', s: 6, c: 0.8, y: 0.9, src: 'file' }]));
+    { t: at(15), r: 'boy', s: 6, c: 0.8, y: 0.9, src: 'file', v: 2 }]));
   eq([history.stats('boy', NOW).count, history.stats('average', NOW).count, history.entryCount()], [1, 0, 1]);
   eq(rate('average', 5, { now: NOW }), false);
+});
+await test('ratings from the old model-face scoring are not compared, but count for the streak', () => {
+  const s = fresh();
+  s.setItem('afr.history.v1', JSON.stringify([{ t: at(14), r: 'boy', s: 9.5, c: 0.8, y: 0.9, src: 'file' }]));
+  eq(history.stats('boy', NOW).count, 0);
+  rate('boy', 5.0, { now: at(15, 9) });
+  rate('boy', 6.0, { now: at(15, 10) });
+  const st = history.stats('boy', NOW);
+  eq([st.best, st.count, st.trend, st.streak], [6, 2, 'up', 2]);
+  eq(history.series('boy'), [5, 6]);
+  eq(JSON.parse(s.getItem('afr.history.v1'))[1].v, history.SCALE);
 });
 await test('same pictureId and reference is saved once; another reference is saved too', () => {
   fresh();
@@ -296,13 +307,13 @@ await test('streak: last rating before midnight and the next just after are two 
   rate('boy', 6.5, { now: at(15, 0, 1) });
   eq(history.stats('boy', at(15, 8)).streak, 2);
 });
-await test('what is stored is numbers only (plus the reference and source words)', () => {
+await test('what is stored is numbers only (plus the reference and source words, and the score scale)', () => {
   const s = fresh();
   rate('boy', 6.123456, { clarity: null, symmetry: 0.987654, source: 'camera', pictureId: 'secret-name.jpg', now: NOW });
   const raw = s.getItem('afr.history.v1');
   ok(!raw.includes('secret-name'), 'picture id must not be stored');
   const [e] = JSON.parse(raw);
-  eq(Object.keys(e).sort(), ['c', 'r', 's', 'src', 't', 'y']);
+  eq(Object.keys(e).sort(), ['c', 'r', 's', 'src', 't', 'v', 'y']);
   eq([e.r, e.s, e.c, e.y, e.src, e.t], ['boy', 6.123, null, 0.988, 'camera', NOW]);
   eq(history.stats('boy', NOW).best, 6.123);
 });
@@ -326,7 +337,7 @@ await test('corrupt or foreign data in the storage is ignored', () => {
   const s = fresh();
   s.setItem('afr.history.v1', '{not json');
   eq(history.stats('boy', NOW).count, 0);
-  s.setItem('afr.history.v1', JSON.stringify([{ t: NOW, r: 'boy', s: 5 }, { t: 'x', r: 'boy', s: 5 }, null, { t: NOW, r: 'cat', s: 5 }, 7]));
+  s.setItem('afr.history.v1', JSON.stringify([{ t: NOW, r: 'boy', s: 5, v: 2 }, { t: 'x', r: 'boy', s: 5, v: 2 }, null, { t: NOW, r: 'cat', s: 5 }, 7]));
   eq(history.stats('boy', NOW).count, 1);
   rate('boy', 6, { now: NOW });                 // adding still works on top of it
   eq(history.stats('boy', NOW).count, 2);

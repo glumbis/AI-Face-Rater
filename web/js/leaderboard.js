@@ -61,7 +61,7 @@ async function rpc(fn, args) {
 
 const oneDecimal = (n) => Math.round(n * 10) / 10;
 
-// Adds or replaces this browser's entry for that model face. regions: {jaw, brows, nose, eyes, outerLips} -> 0 to 10
+// Adds or replaces this browser's entry for that ideal. regions: {jaw, brows, nose, eyes, outerLips} -> 0 to 10
 export async function submitScore({ name, score, reference, regions }) {
   const problem = nameProblem(name);
   if (problem) throw new Error(problem);
@@ -73,7 +73,7 @@ export async function submitScore({ name, score, reference, regions }) {
   });
 }
 
-// The best 20 for a model face: [{name, score}]
+// The best 20 for an ideal: [{name, score}]
 export async function topScores(reference) {
   const rows = await rpc('top_scores', { p_reference: reference, p_limit: 20 });
   return (rows ?? []).map((r) => ({ name: String(r.name), score: Number(r.score) }));

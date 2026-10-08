@@ -28,3 +28,5 @@ shape_predictor_68_face_landmarks.dat
 
 # Your saved ratings normally live in %APPDATA%\AI Face Rater, never in the repo
 history.csv
+# The face photos tools/make_ideal_face.py downloads (Face Research Lab London Set)
+.cache/

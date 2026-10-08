@@ -1,12 +1,13 @@
 """Writes web/js/facedata.js from the Python modules, so the website uses exactly the same data and constants.
 
-Run it from the repo root whenever facelayout.py, modelfaces.py, landmarkdetect.py, headpose.py or phototips.py change:
+Run it from the repo root whenever facelayout.py, idealface.py, idealdata.py, landmarkdetect.py, headpose.py or
+phototips.py change:
 
     py -3.14 tools/export_web_data.py
 
 Nothing in the output is typed by hand: the layout (landmark subset, weights, mirror pairs, cheek/eye/nose points),
-the boy and girl model faces and every upper-case constant of landmarkdetect, headpose and phototips are
-read from the imported modules.
+the ideal face (every upper-case name of idealface and idealdata) and every upper-case constant of landmarkdetect,
+headpose and phototips are read from the imported modules.
 """
 import hashlib
 import json
@@ -20,15 +21,17 @@ sys.path.insert(0, ROOT)
 
 import facelayout  # noqa: E402
 import headpose  # noqa: E402
+import idealdata  # noqa: E402
+import idealface  # noqa: E402
 import landmarkdetect  # noqa: E402
 import phototips  # noqa: E402
 
 OUT = os.path.join(ROOT, "web", "js", "facedata.js")
-SOURCES = ("facelayout.py", "modelfaces.py", "landmarkdetect.py", "headpose.py", "phototips.py")
+SOURCES = ("facelayout.py", "idealface.py", "idealdata.py", "landmarkdetect.py", "headpose.py", "phototips.py")
 
 # Module-level names that are not constants for the website (file paths and the like)
 SKIP = {"SCRIPT_DIR", "LANDMARKER_PATH", "LANDMARKER_URL", "IMAGE_TO_RATE",
-        "MODEL_FACES"}  # the model faces are exported as MODEL_FACES and MODEL_FACE_NAMES
+        "MODEL_FACES"}  # the genders are exported as GENDERS
 # Where each module's constants go, in this order (a name used by several modules gets the value of the last one in
 # the flat CONST; the per-module objects below always have each module's own value)
 # For a name several modules define differently, the plain name in CONST is the first of these
@@ -64,10 +67,6 @@ def constants(module, others):
         except TypeError:
             continue  # numpy arrays (POINT_WEIGHTS) and so on are exported under their layout names
     return found
-
-
-def points(xs, ys):
-    return [[float(x), float(y)] for x, y in zip(xs, ys)]
 
 
 def digest():
@@ -107,7 +106,6 @@ def main():
     exports = {
         "SUBSET": facelayout.SUBSET,
         "REGIONS": facelayout.REGIONS,
-        "REGION_POINTS": facelayout.REGION_POINTS,
         "WEIGHTS": [float(w) for w in facelayout.POINT_WEIGHTS],
         "MIRROR": facelayout.MIRROR_PAIRS,
         "CHEEK_LEFT": facelayout.LEFT_CHEEK_POINTS,
@@ -115,10 +113,8 @@ def main():
         "EYE_OUTER": list(facelayout.EYE_CORNERS),
         "FACE_WIDTH": list(facelayout.FACE_WIDTH_POINTS),
         "NOSE_BRIDGE": list(facelayout.NOSE_BRIDGE_POINTS),
-        "MODEL_FACES": {gender: [points(face["x"], face["y"]) for face in landmarkdetect.model_faces(gender)]
-                        for gender in landmarkdetect.MODEL_FACES},
-        "MODEL_FACE_NAMES": {gender: [face["name"] for face in landmarkdetect.model_faces(gender)]
-                             for gender in landmarkdetect.MODEL_FACES},
+        "GENDERS": list(landmarkdetect.MODEL_FACES),
+        "IDEAL": {**constants(idealface, []), **constants(idealdata, [])},
         "CONST": flat,
         "CONST_LANDMARKDETECT": per_module["landmarkdetect"],
         "CONST_HEADPOSE": per_module["headpose"],
@@ -128,7 +124,6 @@ def main():
     comments = {
         "SUBSET": "MediaPipe landmark numbers used (162 of the 478). Everything below is in the order of SUBSET.",
         "REGIONS": "SUBSET split by region, as MediaPipe landmark numbers.",
-        "REGION_POINTS": "The regions that count (not the inner lips) as positions in the 162 list, for the region scores.",
         "WEIGHTS": "How much each of the 162 points counts in alignment and error.",
         "MIRROR": "For each of the 162 points, the position of its left/right partner (itself on the middle line).",
         "CHEEK_LEFT": "Positions (in the 162 list) around the left cheek, as seen in the picture.",
@@ -136,19 +131,22 @@ def main():
         "EYE_OUTER": "Positions of the outer eye corners (their distance is the face size).",
         "FACE_WIDTH": "Positions at the temples (the face width).",
         "NOSE_BRIDGE": "Positions on the bridge of the nose.",
-        "MODEL_FACES": "The model faces of each gender (from modelfaces.py): a list of faces, 162 [x, y] each.",
-        "MODEL_FACE_NAMES": "Their names (\"Boy 1\", \"Boy 2\", ...), in the same order.",
+        "GENDERS": "The genders you can be rated as (each has its own ideal).",
+        "IDEAL": "The ideal face (idealface.py and idealdata.py): ANCHORS, JAW_LEFT/JAW_RIGHT, FEATURES [name, region, weight, "
+                 "way], REGIONS, the expression limits and messages, REFERENCE, NEUTRAL_EXPRESSION, EXPRESSION_SLOPES and "
+                 "IDEALS {gender: {feature: [target, tolerance]}}. All MediaPipe landmark numbers (of the 478).",
         "CONST": "Every upper-case constant of landmarkdetect.py, headpose.py and phototips.py (flat). A name that several "
                  "modules define with different values (SHARPNESS_WIDTH) is there as HEADPOSE_SHARPNESS_WIDTH and "
                  "PHOTOTIPS_SHARPNESS_WIDTH, and the plain name is headpose's (see CONST_* below too).",
         "CONST_LANDMARKDETECT": "The same constants per module (CONST_HEADPOSE, CONST_PHOTOTIPS): use these for names more than one module defines.",
         "SOURCE_HASH": "Hash of the Python sources this file was made from (golden.json carries the same one).",
     }
-    object_exports = ("MODEL_FACES", "MODEL_FACE_NAMES", "REGIONS", "REGION_POINTS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE",
+    object_exports = ("IDEAL", "REGIONS", "CONST", "CONST_LANDMARKDETECT", "CONST_HEADPOSE",
                       "CONST_PHOTOTIPS")
     lines = [
         "// GENERATED FILE. Do not edit by hand.",
-        "// Made by tools/export_web_data.py from facelayout.py, modelfaces.py, landmarkdetect.py, headpose.py and phototips.py.",
+        "// Made by tools/export_web_data.py from facelayout.py, idealface.py, idealdata.py, landmarkdetect.py, headpose.py and",
+        "// phototips.py.",
         "// Whenever a limit or layout changes in the Python files, re-run (from the repo root):",
         "//     py -3.14 tools/export_web_data.py && py -3.14 tools/make_golden.py",
         "// and the website is in sync again. All numbers here come from the Python modules.",

@@ -3,10 +3,14 @@
 // unavailable or full storage (private mode, blocked site data) never breaks the app; the history then lives in
 // memory until the page is closed.
 
-// The model faces a rating can be for. Saved rows for any other (like "average", a model face that was removed) are skipped
+// The ideals (genders) a rating can be for. Saved rows for any other (like "average", a model face that was removed) are skipped
 export const MODELS = ['boy', 'girl'];
 // The up/down arrow only shows when the score is at least this far from your previous photo's score (history.TREND_MIN_DIFF)
 export const TREND_MIN_DIFF = 0.1;
+// Which scoring a rating was made with (history.SCALE): 1 = comparing with the model faces point by point (until
+// October 2026, those rows have no v), 2 = comparing with the ideal. The scores of the two are not comparable, so the
+// best, the average, the arrow and the chart only use ratings of the current scale (the day streak counts them all)
+export const SCALE = 2;
 
 const KEY = 'afr.history.v1';
 const MAX_ENTRIES = 2000;
@@ -71,6 +75,8 @@ function write(list) {
 }
 
 const round3 = (v) => Math.round(v * 1000) / 1000;
+// The ratings of a reference on the current scale
+const current = (list, reference) => list.filter((e) => e.r === reference && (e.v ?? 1) === SCALE);
 // A score as the page shows it, with one decimal (toFixed, like fmt in app.js)
 const shown = (v) => Number(v.toFixed(1));
 
@@ -85,7 +91,7 @@ export function addRating({ reference, score, clarity = null, symmetry = null, s
   const id = pictureId == null ? null : `${pictureId}|${reference}`;
   if (id && seen.has(id)) return false;
   const entry = { t: when, r: reference, s: round3(score), c: num(clarity) === null ? null : round3(clarity),
-    y: num(symmetry) === null ? null : round3(symmetry), src: String(source || '') };
+    y: num(symmetry) === null ? null : round3(symmetry), src: String(source || ''), v: SCALE };
   const list = read();
   const last = [...list].reverse().find((e) => e.r === reference);
   if (!id && last && when - last.t >= 0 && when - last.t < DUPLICATE_MS && last.s === entry.s && last.c === entry.c && last.y === entry.y) {
@@ -125,7 +131,7 @@ function streakOf(list, now) {
 export function stats(reference, now = Date.now()) {
   const list = read();
   const streak = streakOf(list, now);
-  const scores = list.filter((e) => e.r === reference).map((e) => e.s);
+  const scores = current(list, reference).map((e) => e.s);
   if (!scores.length) return { best: null, average: null, count: 0, trend: null, diff: 0, streak };
   let trend = null, diff = 0;
   if (scores.length >= 2) {
@@ -138,7 +144,7 @@ export function stats(reference, now = Date.now()) {
 
 // The latest n scores for a reference, oldest first (for a small chart). Fewer if there are fewer; [] if none.
 export function series(reference, n = 12) {
-  const scores = read().filter((e) => e.r === reference).map((e) => e.s);
+  const scores = current(read(), reference).map((e) => e.s);
   return n > 0 ? scores.slice(-n) : [];
 }
 

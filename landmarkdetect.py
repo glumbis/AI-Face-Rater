@@ -8,8 +8,8 @@ import sys
 from collections import namedtuple
 
 from facelayout import (EYE_CORNERS, FACE_WIDTH_POINTS, LEFT_CHEEK_POINTS, MIRROR_PAIRS, NOSE_BRIDGE_POINTS,
-                        POINT_WEIGHTS as _POINT_WEIGHTS, REGION_POINTS, RIGHT_CHEEK_POINTS, SUBSET, position)
-import modelfaces
+                        POINT_WEIGHTS as _POINT_WEIGHTS, RIGHT_CHEEK_POINTS, SUBSET, position)
+import idealface
 import overlay
 from headpose import MAX_TILT, MAX_TURN, REFUSED_MESSAGES, facing_problem, head_angles  # noqa: F401
 
@@ -71,8 +71,11 @@ def limit_size(img):
 
 # What finding a face gives: its landmarks as lists of pixel coordinates (the 162 landmarks of facelayout.py, in the
 # picture's own pixels), which way the head is facing, (turn, tilt) in degrees, or None if that couldn't be worked out,
-# and how deep each landmark is (zList, growing away from the camera, in the same pixels as x)
-Detection = namedtuple("Detection", ["xList", "yList", "angles", "zList"])
+# how deep each landmark is (zList, growing away from the camera, in the same pixels as x), all 478 MediaPipe landmarks
+# (points, 478 x 3: x, y and depth, for idealface.py) and MediaPipe's expression measurements (blendshapes,
+# {"mouthSmileLeft": 0.1, ...}, or None)
+Detection = namedtuple("Detection", ["xList", "yList", "angles", "zList", "points", "blendshapes"],
+                       defaults=(None, None))
 
 # The model file is ~4 MB and takes a moment to load, so it's only read once, when first needed. The still-picture
 # landmarker ("image") and the one for the live camera ("video", which follows the face from one picture to the next,
@@ -104,7 +107,7 @@ def load_landmarker(live=False):
         options = vision.FaceLandmarkerOptions(
             base_options=BaseOptions(model_asset_buffer=modelData),
             running_mode=vision.RunningMode.VIDEO if live else vision.RunningMode.IMAGE,
-            num_faces=MAX_FACES, output_face_blendshapes=False, output_facial_transformation_matrixes=True)
+            num_faces=MAX_FACES, output_face_blendshapes=True, output_facial_transformation_matrixes=True)
         landmarkers[key] = vision.FaceLandmarker.create_from_options(options)
     except Exception:
         # MediaPipe's own message ("Unable to open zip archive" and so on) doesn't say what to do
@@ -137,13 +140,16 @@ def detect_face(img, detectScale=1.0, live=False):
     # (x, y) of the chosen landmarks in the picture's pixels. MediaPipe's numbers are shares of the picture's width
     # and height, with 0 and 1 at the outer edges of the picture, so the middle of the first pixel is at -0.5.
     # Its depth (z) is on the same scale as x
-    faces = [np.array([(p.x * w - 0.5, p.y * h - 0.5, p.z * w) for p in face])[SUBSET] for face in result.face_landmarks]
-    # Only rate the biggest face, otherwise the landmark lists get longer than the model face's
+    faces = [np.array([(p.x * w - 0.5, p.y * h - 0.5, p.z * w) for p in face]) for face in result.face_landmarks]
+    # Only rate the biggest face
     which = max(range(len(faces)), key=lambda n: np.ptp(faces[n][:, 0]) * np.ptp(faces[n][:, 1]))
     matrices = result.facial_transformation_matrixes
     angles = head_angles(matrices[which]) if which < len(matrices) else None
-    face = faces[which]
-    return Detection(face[:, 0].tolist(), face[:, 1].tolist(), angles, face[:, 2].tolist())
+    shapes = result.face_blendshapes
+    blendshapes = ({c.category_name: float(c.score) for c in shapes[which]} if shapes and which < len(shapes) else None)
+    points = faces[which]
+    face = points[SUBSET]
+    return Detection(face[:, 0].tolist(), face[:, 1].tolist(), angles, face[:, 2].tolist(), points, blendshapes)
 
 
 def landmark_detect(img, detectScale=1.0, live=False):
@@ -216,10 +222,9 @@ def size_problem(size, current=None):
 SKIN_THRESHOLD = 7.0
 # When this share of the cheek squares is inconsistent, skin clarity is 0
 SKIN_WORST_FRACTION = 0.15
-# How much uneven skin lowers the score. It's added to the shape error (see SCORE_MID), from 0 at clarity 1 to
-# this at clarity 0, so very uneven skin lowers the score as much as a 0.0025 bigger shape error would (that takes a
-# score of 5 down to about 3.7, a quarter off)
-SKIN_PENALTY = 0.0025
+# How much uneven skin lowers the score. It's added to the ideal error (see SCORE_MID), from 0 at clarity 1 to
+# this at clarity 0 (very uneven skin takes a score of 5 down to about 3.8, a quarter off)
+SKIN_PENALTY = 0.1
 # A spot darker than this share of the brightness around it, and not more than HAIR_MAX_REDNESS (Lab a*) redder,
 # counts as hair (stubble, beard) and is left out, so beards don't count as uneven skin.
 # The downside is that dark brown spots (like moles) are left out too, only red ones count
@@ -359,47 +364,30 @@ def skin_clarity(img, drawOn, xList, yList):
     return 1 - min(np.mean(fractions) / SKIN_WORST_FRACTION, 1)
 
 
-# ---------- Comparing to the model face ----------
-# How the error (shape error plus the skin and symmetry penalties) becomes a score:
+# ---------- Comparing to the ideal ----------
+# The face is measured (eye spacing, nose width, jaw shape and so on, see idealface.py) and each measurement is
+# compared with its target for the gender, in tolerances (how much real faces differ). The weighted RMS of those
+# differences is the "ideal error": 0 is the ideal face, a typical face is about 1. With the penalties for uneven skin
+# and a lopsided face added, it becomes a score:
 #     score = 10 / (1 + (error / SCORE_MID) ** SCORE_POWER)
-# An error of SCORE_MID gives 5. SCORE_POWER says how quickly the score falls around it: an error a fifth smaller
-# gives 7.9, a fifth bigger 2.5, while the same face in another photo (an error under 0.01) still gets about 10.
-# It has to be this steep because ordinary faces are all about equally far from a model face: two different people
-# are about 0.02 to 0.04 apart (perBoy.jpg and perGirl.jpg 0.030), and with the old, gentler score almost everyone got
-# about 5. Tuned on made-up faces (the model faces with the eyes, nose, mouth, brows and jaw changed by as much as real
-# faces differ, 4 to 12%, plus landmark noise and head pose): with five model faces per gender nine in ten of them
-# score 2.7 to 9 (half of them over 6.4), with only one per gender, which is close to fewer faces, 0.6 to 9 (half over 3.7)
-SCORE_MID = 0.027
-SCORE_POWER = 6.0
+# An error of SCORE_MID gives 5. Tuned on the 102 faces of the Face Research Lab London Set: half of them score over
+# about 5, eight in ten between about 3 and 7.7, and the model faces 6 to 9.5
+SCORE_MID = 1.15
+SCORE_POWER = 3.0
 
-# How much each landmark counts, both when lining the face up with the model face and when measuring the difference
-# (the reasons are in facelayout.py, where the weights of the regions are)
-POINT_WEIGHTS = np.array(_POINT_WEIGHTS)
-
-# A head tilted up or down, or turned to the side, changes the face's shape in the picture a lot: the nose tip is about
-# half an eye width in front of the eyes, so 5 degrees moves it 4% of the eye width against them (as big a change as
-# between two different faces). MediaPipe also says how deep each landmark is, so before comparing, the face is turned
-# back in 3D: every tilt from -TILT_SEARCH to TILT_SEARCH degrees is tried in steps of POSE_STEP, then every turn from
-# -TURN_SEARCH to TURN_SEARCH, then both again in steps of POSE_FINE_STEP around the best ones, and the closest fit is
-# kept, just like the alignment finds the best position, roll and size. The measured head angles aren't used for this:
-# they are a few degrees off for a face that isn't in the middle of the picture, and this way it doesn't matter how
-# the model face was posed either
-TILT_SEARCH = 40
-TURN_SEARCH = 20
-POSE_STEP = 2.0
-POSE_FINE_STEP = 0.25
+# The genders you can be rated as (each has its own ideal, see idealdata.py)
+MODEL_FACES = ("boy", "girl")
 
 # MIRROR_PAIRS (facelayout.py) has, for each landmark, the landmark in the same place on the other side of the face
 # (points on the middle line, like the nose tip and chin, are their own partner)
 # How lopsided a face must be (difference between the two sides, as a share of the eye width) for symmetry 0.
-# The two model faces measure about 0.010, and the landmarks wobble less than the old ones did (they were 0.013 to 0.022
-# and the limit was 0.08), so the limit is lower, which keeps the symmetry percentages about as they were
+# The model faces measure about 0.010
 SYMMETRY_WORST = 0.05
-# Like SKIN_PENALTY: added to the shape error, from 0 at symmetry 1 to this at symmetry 0 (an eighth off a score of 5)
-SYMMETRY_PENALTY = 0.0012
+# Like SKIN_PENALTY: added to the ideal error, from 0 at symmetry 1 to this at symmetry 0 (an eighth off a score of 5)
+SYMMETRY_PENALTY = 0.05
 
-# The model faces you can compare with. Each can have several pictures (see modelfaces.py), the closest one counts
-MODEL_FACES = ("boy", "girl")
+# How much each landmark counts when lining the face up with its mirror image for the symmetry
+POINT_WEIGHTS = np.array(_POINT_WEIGHTS)
 
 
 def dist(x1, y1, x2, y2):
@@ -429,81 +417,27 @@ def eye_width(points):
     return np.linalg.norm(points[EYE_CORNERS[1]] - points[EYE_CORNERS[0]])
 
 
-def model_faces(gender):
-    # The model faces of a gender ("boy" or "girl"): a list of {"name", "file", "x", "y"} (see modelfaces.py)
-    faces = modelfaces.FACES.get(str(gender).lower())
-    if not faces:
+def check_gender(gender):
+    # The gender as "boy" or "girl", or ValueError
+    gender = str(gender).lower()
+    if gender not in MODEL_FACES:
         raise ValueError("gender must be 'boy' or 'girl'")
-    return faces
+    return gender
 
-def posed(points, tilt, turn):
-    # The face (n x 3: x, y and depth) as the camera would see it with the head tilted `tilt` degrees further down and
-    # turned `turn` degrees further to the right in the picture, as n x 2. The depth grows away from the camera
-    a, b = np.radians(tilt), np.radians(turn)
-    x = points[:, 0] * np.cos(b) - points[:, 2] * np.sin(b)
-    z = points[:, 0] * np.sin(b) + points[:, 2] * np.cos(b)
-    return np.column_stack([x, points[:, 1] * np.cos(a) - z * np.sin(a)])
-
-def around(middle, step, reach):
-    # middle, and the numbers every step from it up to reach away on both sides
-    n = round(reach / step)
-    return [middle + i * step for i in range(-n, n + 1)]
-
-def face_fit(points, perfect):
-    # The difference between the face (162 x 3, or 162 x 2 without depth) and one model face (162 x 2) after lining
-    # them up, with the head turned back the way that fits best (see TILT_SEARCH), as a share of the model face's eye
-    # width. Returns that error and the face as it was lined up (162 x 2), for region_scores
-    if points.shape[1] < 3:
-        aligned = align(points, perfect)
-        return weighted_rms(aligned, perfect) / eye_width(perfect), aligned
-    def error(tilt, turn):
-        return weighted_rms(align(posed(points, tilt, turn), perfect), perfect)
-    tilt = min(around(0, POSE_STEP, TILT_SEARCH), key=lambda t: error(t, 0))
-    turn = min(around(0, POSE_STEP, TURN_SEARCH), key=lambda u: error(tilt, u))
-    tilt = min(around(tilt, POSE_FINE_STEP, POSE_STEP), key=lambda t: error(t, turn))
-    turn = min(around(turn, POSE_FINE_STEP, POSE_STEP), key=lambda u: error(tilt, u))
-    return error(tilt, turn) / eye_width(perfect), align(posed(points, tilt, turn), perfect)
-
-def model_fits(xList, yList, gender, zList=None):
-    # How different the face's shape is from each model face of the gender, as a list of (error, name, aligned face,
-    # model face). The error is a share of the model face's eye width (0 = identical). zList is the landmarks' depth,
-    # without it no tilt is tried
-    selfie = np.column_stack([xList, yList] if zList is None else [xList, yList, zList]).astype(np.float64)
-    # A face looks just as good in a mirror, and a mirrored photo (like from a selfie camera) shouldn't change
-    # the score, so compare the face both ways round and keep the closest
-    mirrored = selfie[MIRROR_PAIRS]
-    mirrored[:, 0] *= -1
-    fits = []
-    for face in model_faces(gender):
-        perfect = np.column_stack([face["x"], face["y"]]).astype(np.float64)
-        error, aligned = min(face_fit(selfie, perfect), face_fit(mirrored, perfect), key=lambda fit: fit[0])
-        fits.append((float(error), face["name"], aligned, perfect))
-    return fits
-
-def model_errors(xList, yList, gender, zList=None):
-    # (error, name) for each model face of the gender (see model_fits)
-    return [(error, name) for error, name, _, _ in model_fits(xList, yList, gender, zList)]
-
-def closest_model_face(xList, yList, gender, zList=None):
-    # (error, name) of the model face of the gender that the face is most like
-    return min(model_errors(xList, yList, gender, zList), key=lambda error: error[0])
-
-def shape_error(xList, yList, gender, zList=None):
-    # The shape error against the closest model face of the gender
-    return closest_model_face(xList, yList, gender, zList)[0]
+def ideal_error(points, gender, blendshapes=None):
+    # (error, region errors, deviations) of the face (478 x 3 MediaPipe landmarks) against the ideal of the gender,
+    # with the expression taken off first (see idealface.py)
+    values = idealface.neutral_measures(points, blendshapes)
+    return idealface.ideal_errors(values, check_gender(gender))
 
 def score_from_error(err):
-    # Turns an error into a score from 0 to 10, an exact match gives 10 (see SCORE_MID)
+    # Turns an error into a score from 0 to 10, the ideal face gives 10 (see SCORE_MID)
     return 10 / (1 + (err / SCORE_MID) ** SCORE_POWER)
 
-def region_scores(aligned, perfect):
-    # A score from 0 to 10 for each region that counts (jaw, brows, nose, eyes, outerLips), to show which parts of the
-    # face are closest to the model face and which are furthest. It uses the same lined-up face as the total, so each
-    # region's error is measured the same way (its own weighted RMS, as a share of the model face's eye width) and
-    # turned into a score the same way, which makes the numbers comparable to the main score
-    size = eye_width(perfect)
-    return {name: float(score_from_error(weighted_rms(aligned[points], perfect[points], POINT_WEIGHTS[points]) / size))
-            for name, points in REGION_POINTS.items()}
+def region_scores(regionErrors):
+    # A score from 0 to 10 for each region (jaw, brows, nose, eyes, outerLips), from its own measurements only, through
+    # the same formula as the total, so the numbers are comparable to the main score
+    return {name: float(score_from_error(error)) for name, error in regionErrors.items()}
 
 def symmetry(xList, yList):
     # Returns 0 (very lopsided) to 1 (perfectly symmetric).
@@ -516,15 +450,15 @@ def symmetry(xList, yList):
 
 
 def rate_face(img, gender, source="camera"):
-    # Rates the face in img against the boy or girl model faces (gender is "boy" or "girl"): it gets the score of the
-    # model face of that gender it is most like.
+    # Rates the face in img against the ideal of the boy or girl faces (gender is "boy" or "girl", see idealface.py).
     # source is "camera" for a webcam picture, which needs a big face (MIN_FACE_SIZE), or "file" for a picked photo,
     # which may have a smaller one (MIN_FACE_SIZE_FILE).
-    # Returns a dict with score (0 to 10), shapeError, modelFace (the name of the closest model face, like "Boy 3"),
-    # modelFaceCount (how many model faces that gender has), clarity (None if the cheeks couldn't be judged),
-    # skinPenalty, skinFactor, symmetry, symmetryPenalty, symmetryFactor, regions (a score from 0 to 10 for jaw, brows,
-    # nose, eyes and outerLips, against that same model face, see region_scores) and picture (a copy with the landmarks
-    # and cheek squares drawn on it). Raises FaceError if it can't be rated.
+    # Returns a dict with score (0 to 10), shapeError (the ideal error, 0 = the ideal face, see SCORE_MID), clarity
+    # (None if the cheeks couldn't be judged), skinPenalty, skinFactor, symmetry, symmetryPenalty, symmetryFactor,
+    # regions (a score from 0 to 10 for jaw, brows, nose, eyes and outerLips, see region_scores), deviations (how far
+    # each measurement of idealface.FEATURES is from its target, in tolerances, negative = too little) and picture (a
+    # copy with the landmarks and cheek squares drawn on it). Raises FaceError if it can't be rated.
+    gender = check_gender(gender)
     img = limit_size(img)
 
     found = detect_face(img)
@@ -544,16 +478,20 @@ def rate_face(img, gender, source="camera"):
     if problem is not None:
         raise FaceError(REFUSED_MESSAGES[problem])
 
+    # A big smile or an open mouth changes the face too much to correct
+    expression = idealface.expression_problem(found.blendshapes)
+    if expression is not None:
+        raise FaceError(idealface.EXPRESSION_MESSAGES[expression])
+
     # Draw on a copy, and check the skin colour on the clean picture
     picture = img.copy()
     draw_landmarks(picture, selfieX, selfieY)
 
     clarity = skin_clarity(img, picture, selfieX, selfieY)
 
-    fits = model_fits(selfieX, selfieY, gender, found.zList)
-    shapeError, modelFace, aligned, perfect = min(fits, key=lambda fit: fit[0])
+    shapeError, regionErrors, deviations = ideal_error(found.points, gender, found.blendshapes)
 
-    # Uneven skin and a lopsided face count as a little extra shape error. There's no penalty when the cheeks
+    # Uneven skin and a lopsided face count as a little extra error. There's no penalty when the cheeks
     # couldn't be judged, so a hidden cheek or a beard doesn't lower the score
     skinPenalty = 0.0 if clarity is None else SKIN_PENALTY * (1 - clarity)
     faceSymmetry = symmetry(selfieX, selfieY)
@@ -567,10 +505,10 @@ def rate_face(img, gender, source="camera"):
     # Odd landmarks (for example all on top of each other) could give "not a number", count that as 0
     score = 0.0 if np.isnan(score) else float(np.clip(score, 0, 10))
 
-    return {"score": score, "shapeError": shapeError, "modelFace": modelFace, "modelFaceCount": len(fits),
-            "clarity": clarity, "skinPenalty": skinPenalty, "skinFactor": skinFactor, "symmetry": faceSymmetry,
-            "symmetryPenalty": symmetryPenalty, "symmetryFactor": symmetryFactor,
-            "regions": region_scores(aligned, perfect), "picture": picture}
+    return {"score": score, "shapeError": shapeError, "clarity": clarity, "skinPenalty": skinPenalty,
+            "skinFactor": skinFactor, "symmetry": faceSymmetry, "symmetryPenalty": symmetryPenalty,
+            "symmetryFactor": symmetryFactor, "regions": region_scores(regionErrors), "deviations": deviations,
+            "picture": picture}
 
 
 def main():
@@ -585,7 +523,7 @@ def main():
     except (FileNotFoundError, RuntimeError, FaceError) as e:
         sys.exit(str(e))
 
-    gender = input("Compare with the boy or girl model face? (write boy or girl) Answer here --> ")
+    gender = input("Rate as a boy or a girl? (write boy or girl) Answer here --> ")
     if gender.lower() not in MODEL_FACES:
         print("Real beauty comes from the mind, therefor you are a fucking 0. Can't even write boy or girl... smh")
         time.sleep(7)
@@ -610,8 +548,6 @@ def main():
 
     print(f"Symmetry: {round(result['symmetry'] * 100)}% (score x{round(result['symmetryFactor'], 2)})")
 
-    if result["modelFaceCount"] > 1:
-        print(f"Closest to {result['modelFace']}")
     print(f"Your beauty score is {round(score,1)} / 10!")
     # Count up to the score in steps of 0.1
     for i in range(round(score * 10) + 1):

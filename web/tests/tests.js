@@ -1,6 +1,7 @@
 // Runs the website's scoring.js and headpose.js on golden.json (made by tools/make_golden.py from the Python app).
 // Tolerances: score 0.05 (also each region's score), clarity 0.02, angles 0.2 degrees (the real differences are far smaller, see the Max rows).
-import { SOURCE_HASH } from '../js/facedata.js';
+// The ideal face's numbers (measurements, errors, deviations) are compared much tighter: both sides work in double precision.
+import { GENDERS, IDEAL, SOURCE_HASH, SUBSET } from '../js/facedata.js';
 import {
   HeadTracker, RecentFrames, facingProblem, headAngles, sharpness,
 } from '../js/headpose.js';
@@ -8,11 +9,15 @@ import {
   gaussianBlurF32, lbgrToLab, resizeAreaU8, resizeLinearF32,
 } from '../js/imageops.js';
 import {
-  FaceError, cheekInconsistencies, faceSize, modelErrors, rateFace, shapeError, sizeProblem, skinClarity, subsetPoints,
-  symmetry,
+  ExpressionTracker, FaceError, cheekInconsistencies, deviations, expression, expressionProblem, faceSize, idealError,
+  idealErrors, measure, neutralMeasures, rateFace, regionScores, scoreFromError, sizeProblem, skinClarity,
+  subsetPoints, symmetry, turned,
 } from '../js/scoring.js';
 
-const TOL = { score: 0.05, region: 0.05, clarity: 0.02, angle: 0.2, shapeError: 1e-4, symmetry: 0.002, size: 1e-9, sharp: 1e-3 };
+const TOL = {
+  score: 0.05, region: 0.05, clarity: 0.02, angle: 0.2, shapeError: 1e-7, measure: 1e-8, turned: 2e-6, symmetry: 0.002,
+  size: 1e-9, sharp: 1e-3,
+};
 const MASK_MISMATCH = 0.01; // share of a cheek's pixels that may differ
 
 const rows = [];
@@ -138,30 +143,55 @@ async function testCase(c) {
     record(g, `cheek ${i} mask`, share <= MASK_MISMATCH, `${diff} of ${want.w * want.h} pixels differ`);
   });
 
-  // symmetry and shape
+  // symmetry
   near(g, 'symmetry', 'symmetry', symmetry(pts), e.symmetry, TOL.symmetry);
   near(g, 'symmetry from 478 points', 'symmetry', symmetry(c.points), e.symmetry, TOL.symmetry);
-  for (const [ref, want] of Object.entries(e.refs)) {
-    near(g, `shape error vs ${ref}`, 'shape error', shapeError(pts, ref), want.shapeError, TOL.shapeError);
-    modelErrors(pts, ref).forEach(({ error }, i) => {
-      near(g, `shape error vs ${ref} model face ${i + 1}`, 'shape error', error, want.errors[i], TOL.shapeError);
-    });
+
+  // the measurements, and the same with the expression taken off
+  compareValues(g, 'measure', measure(c.points), e.measures, TOL.measure, 'measurement');
+  compareValues(g, 'neutral measure', neutralMeasures(c.points, c.blendshapes), e.neutral, TOL.measure, 'measurement');
+
+  // the ratings
+  checkRatings(g, img, c, c.blendshapes, e, e);
+  for (const variation of c.expressions ?? []) {
+    checkRatings(`${g} / ${variation.label}`, img, c, variation.blendshapes, variation.expected, e);
+  }
+}
+
+// Numbers by name: the same names in the same order, each within tol
+function compareValues(group, label, got, want, tol, kind) {
+  record(group, `${label} names`, Object.keys(got).join() === Object.keys(want).join(), Object.keys(got).join());
+  for (const [key, value] of Object.entries(want)) near(group, `${label} ${key}`, kind, got[key], value, tol);
+}
+
+// The ratings of one picture with some blendshapes against what Python gave (expected: refusal and refs; facts: the
+// parts that do not depend on the blendshapes), for both genders and both sources
+function checkRatings(g, img, c, blendshapes, expected, facts) {
+  for (const [ref, want] of Object.entries(expected.refs)) {
+    const values = neutralMeasures(c.points, blendshapes);
+    const found = idealErrors(values, ref);
+    near(g, `ideal error vs ${ref}`, 'shape error', found.error, want.shapeError, TOL.shapeError);
+    compareValues(g, `${ref} region errors`, found.regions, want.regionErrors, TOL.shapeError, 'shape error');
+    compareValues(g, `${ref} deviations`, found.deviations, want.deviations, TOL.shapeError, 'deviation');
+    near(g, `idealError() vs ${ref}`, 'shape error', idealError(c.points, ref, blendshapes).error, want.shapeError, TOL.shapeError);
     for (const source of ['camera', 'file']) {
       const label = `rateFace ${ref}/${source}`;
-      const refusal = e.refusal[source];
+      const refusal = expected.refusal[source];
       try {
-        const r = rateFace(img, c.points, c.matrix, ref, source);
+        const r = rateFace(img, c.points, c.matrix, ref, source, blendshapes);
         if (refusal) { record(g, label, false, `should have been refused: ${refusal}`); continue; }
         near(g, `${label} score`, 'score', r.score, want.score, TOL.score);
-        record(g, `${label} closest model face`, r.modelFace === want.modelFace && r.modelFaceCount === want.modelFaceCount,
-          `got ${r.modelFace} of ${r.modelFaceCount}, want ${want.modelFace} of ${want.modelFaceCount}`);
+        near(g, `${label} shape error`, 'shape error', r.shapeError, want.shapeError, TOL.shapeError);
         record(g, `${label} regions`, Object.keys(r.regions).join() === Object.keys(want.regions).join(), Object.keys(r.regions).join());
         for (const [region, wantScore] of Object.entries(want.regions)) {
           near(g, `${label} ${region} score`, 'region score', r.regions[region], wantScore, TOL.region);
         }
-        near(g, `${label} clarity`, 'clarity', r.clarity, e.clarity, TOL.clarity);
-        near(g, `${label} skin penalty`, 'penalty', r.skinPenalty, e.skinPenalty, 1e-3);
-        near(g, `${label} symmetry penalty`, 'penalty', r.symmetryPenalty, e.symmetryPenalty, 1e-3);
+        compareValues(g, `${label} deviations`, r.deviations, want.deviations, TOL.shapeError, 'deviation');
+        near(g, `${label} clarity`, 'clarity', r.clarity, facts.clarity, TOL.clarity);
+        near(g, `${label} skin penalty`, 'penalty', r.skinPenalty, facts.skinPenalty, 1e-3);
+        near(g, `${label} symmetry penalty`, 'penalty', r.symmetryPenalty, facts.symmetryPenalty, 1e-3);
+        near(g, `${label} skin factor`, 'factor', r.skinFactor, want.skinFactor, 1e-2);
+        near(g, `${label} symmetry factor`, 'factor', r.symmetryFactor, want.symmetryFactor, 1e-2);
       } catch (error) {
         const ok = refusal && error instanceof FaceError && error.message === refusal;
         record(g, label, ok, ok ? `refused: ${error.message}` : `${error.name}: ${error.message}, want ${refusal}`);
@@ -229,6 +259,191 @@ function testRecents(sequences) {
   });
 }
 
+// ---------- The ideal face ----------
+const sameNumbers = (got, want, tol) => got.length === want.length && got.every((v, i) => Math.abs(v - want[i]) <= tol);
+
+// The 478 points of a stored case (the golden file keeps a stored picture's points with the case)
+function pointsOf(golden, item) {
+  return item.from ? golden.cases.find((c) => c.name === item.from).points : item.points;
+}
+
+function testIdealCases(golden) {
+  for (const item of golden.idealCases) {
+    const g = `ideal ${item.label}`;
+    const points = pointsOf(golden, item);
+    const got = turned(points);
+    let worst = 0;
+    got.forEach((p, i) => p.forEach((v, a) => { worst = Math.max(worst, Math.abs(v - item.turned[i][a])); }));
+    dev('turned face (reference units)', worst);
+    record(g, 'turned face', worst <= TOL.turned, `largest difference ${worst.toExponential(2)}`);
+    compareValues(g, 'measure', measure(points), item.measure, TOL.measure, 'measurement');
+    compareValues(g, 'neutral measure', neutralMeasures(points, item.blendshapes), item.neutral, TOL.measure, 'measurement');
+    for (const [key, want] of Object.entries(item.errors)) {
+      const [gender, how] = key.split('/');
+      const found = idealError(points, gender, how === 'neutral' ? item.blendshapes : null);
+      near(g, `error ${key}`, 'shape error', found.error, want.error, TOL.shapeError);
+      compareValues(g, `region errors ${key}`, found.regions, want.regions, TOL.shapeError, 'shape error');
+      compareValues(g, `deviations ${key}`, found.deviations, want.deviations, TOL.shapeError, 'deviation');
+    }
+  }
+}
+
+function testExpressionCases(cases) {
+  cases.forEach((c, i) => {
+    const g = 'expression';
+    const name = `case ${i} ${JSON.stringify(c.blendshapes)}`;
+    const got = expression(c.blendshapes);
+    record(g, `${name} values`, c.expression === null ? got === null : sameNumbers(got, c.expression, 1e-12), `got ${got}, want ${c.expression}`);
+    record(g, `${name} problem`, expressionProblem(c.blendshapes) === c.problem, `got ${expressionProblem(c.blendshapes)}, want ${c.problem}`);
+    record(g, `${name} hint`, expressionProblem(c.blendshapes, true) === c.hint, `got ${expressionProblem(c.blendshapes, true)}, want ${c.hint}`);
+  });
+}
+
+function testExpressionTrackers(sequences) {
+  sequences.forEach((steps, n) => {
+    const tracker = new ExpressionTracker();
+    let wrong = 0;
+    const seen = new Set();
+    for (const s of steps) {
+      const got = tracker.add(s.blendshapes, s.t);
+      seen.add(got);
+      if (got !== s.problem || tracker.hint !== s.problem) wrong++;
+    }
+    record('ExpressionTracker', `sequence ${n} (${steps.length} pictures)`, wrong === 0, `${wrong} different answers`);
+    record('ExpressionTracker', `sequence ${n} shows several tips`, seen.size >= 2, `tips seen: ${[...seen]}`);
+  });
+}
+
+// ---------- What the ideal face must do (the same checks as the Python tests) ----------
+const targetsOf = (gender) => Object.fromEntries(Object.entries(IDEAL.IDEALS[gender]).map(([name, [target]]) => [name, target]));
+
+// The landmarks tilted, turned and rolled in 3D, resized and moved
+function turnedIn3d(points, tilt, turn, roll, scale, shift) {
+  const [a, b, c] = [tilt, turn, roll].map((d) => (d * Math.PI) / 180);
+  const tilting = [[1, 0, 0], [0, Math.cos(a), -Math.sin(a)], [0, Math.sin(a), Math.cos(a)]];
+  const turning = [[Math.cos(b), 0, -Math.sin(b)], [0, 1, 0], [Math.sin(b), 0, Math.cos(b)]];
+  const rolling = [[Math.cos(c), -Math.sin(c), 0], [Math.sin(c), Math.cos(c), 0], [0, 0, 1]];
+  const times = (m, n) => m.map((row) => [0, 1, 2].map((j) => row[0] * n[0][j] + row[1] * n[1][j] + row[2] * n[2][j]));
+  const r = times(rolling, times(tilting, turning));
+  const mid = [0, 1, 2].map((k) => points.reduce((sum, p) => sum + p[k], 0) / points.length);
+  return points.map((p) => {
+    const d = [p[0] - mid[0], p[1] - mid[1], p[2] - mid[2]];
+    return [0, 1, 2].map((k) => scale * (r[k][0] * d[0] + r[k][1] * d[1] + r[k][2] * d[2]) + mid[k] + shift[k]);
+  });
+}
+
+// Pairs of MediaPipe landmarks that are each other's left and right partner (from the 162 list's MIRROR), and the
+// nostril wings
+async function mirrorPartners() {
+  const { MIRROR } = await import('../js/facedata.js');
+  const partner = Array.from({ length: 478 }, (_, i) => i);
+  SUBSET.forEach((landmark, i) => { partner[landmark] = SUBSET[MIRROR[i]]; });
+  partner[129] = 358; partner[358] = 129;
+  return partner;
+}
+
+async function testBehaviour(golden) {
+  const g = 'ideal behaviour';
+  const boy = golden.cases.find((c) => c.name === 'perBoy-base').points;
+  const girl = golden.cases.find((c) => c.name === 'perGirl-base').points;
+
+  // a head tilted, turned or rolled, nearer or further away, measures the same
+  const before = measure(boy);
+  for (const [tilt, turn, roll] of [[20, 0, 0], [-20, 0, 0], [0, 10, 0], [15, -8, 5], [0, 0, 30]]) {
+    const after = measure(turnedIn3d(boy, tilt, turn, roll, 1.3, [40, -25, 7]));
+    const worst = Math.max(...Object.keys(before).map((k) => Math.abs(after[k] - before[k])));
+    dev('turned head (measurement)', worst);
+    record(g, `turned head ${tilt}/${turn}/${roll} measures the same`, worst < 1e-8, `largest difference ${worst.toExponential(2)}`);
+  }
+
+  // the mirror image (x the other way round, left and right landmarks swapped) measures the same
+  const partner = await mirrorPartners();
+  const mirrored = Array.from({ length: 478 }, (_, i) => [-boy[partner[i]][0], boy[partner[i]][1], boy[partner[i]][2]]);
+  const mirrorMeasures = measure(mirrored);
+  const worstMirror = Math.max(...Object.keys(before).map((k) => Math.abs(mirrorMeasures[k] - before[k])));
+  dev('mirrored face (measurement)', worstMirror);
+  record(g, 'a mirrored face measures the same', worstMirror < 1e-8, `largest difference ${worstMirror.toExponential(2)}`);
+
+  // the ideal face scores ten, and each region only counts its own measurements
+  for (const gender of GENDERS) {
+    const targets = targetsOf(gender);
+    const { error, regions, deviations: z } = idealErrors(targets, gender);
+    record(g, `${gender}: the ideal face has no error`, error === 0 && Object.values(regions).every((e) => e === 0)
+      && Object.values(z).every((v) => v === 0), `error ${error}`);
+    near(g, `${gender}: the ideal face scores 10`, 'score', scoreFromError(error), 10, 1e-9);
+    for (const [name, region, , way] of IDEAL.FEATURES) {
+      const changed = { ...targets };
+      changed[name] -= 3 * IDEAL.IDEALS[gender][name][1] * (way >= 0 ? 1 : -1);
+      const found = idealErrors(changed, gender);
+      const others = Object.entries(found.regions).filter(([r]) => r !== region).every(([, e]) => e === 0);
+      record(g, `${gender}/${name}: only the ${region} region changes`,
+        Math.abs(found.deviations[name] - (way >= 0 ? -3 : 3)) < 1e-9 && found.regions[region] > 0.5 && others,
+        JSON.stringify(found.regions));
+    }
+    // past the target is fine for the one-sided measurements
+    for (const [name, , , way] of IDEAL.FEATURES) {
+      const changed = { ...targets };
+      changed[name] += 2 * IDEAL.IDEALS[gender][name][1] * (way || 1);
+      const error = idealErrors(changed, gender).error;
+      record(g, `${gender}/${name}: ${way ? 'past the target is fine' : 'both ways count'}`, (error < 1e-12) === (way !== 0), `error ${error}`);
+    }
+  }
+
+  // one odd measurement can't take the whole score
+  const odd = measure(boy);
+  odd.noseWidth = 100;
+  record(g, 'one odd measurement is cut at MAX_DEVIATION', deviations(odd, 'boy').noseWidth === IDEAL.MAX_DEVIATION, '');
+
+  // a rounded jaw is less sharp and scores lower; a wider face is shorter and scores lower
+  const rounded = boy.map((p) => p.slice());
+  for (const chain of [IDEAL.JAW_LEFT, IDEAL.JAW_RIGHT]) {
+    for (let round = 0; round < 3; round++) {
+      const inner = chain.slice(1, -1).map((i) => rounded[i].slice());
+      chain.slice(1, -1).forEach((i, k) => {
+        rounded[i] = [0, 1, 2].map((a) => 0.4 * inner[k][a] + 0.3 * (rounded[chain[k]][a] + rounded[chain[k + 2]][a]));
+      });
+    }
+  }
+  record(g, 'a rounded jaw is less sharp', measure(rounded).jawSharpness < measure(boy).jawSharpness - 0.03, '');
+  record(g, 'a rounded jaw lowers the jaw region', idealError(rounded, 'boy').regions.jaw > idealError(boy, 'boy').regions.jaw + 0.3, '');
+  const wide = boy.map((p) => [p[0] * 1.12, p[1], p[2] * 1.12]);
+  record(g, 'a wider face is shorter', measure(wide).faceLength < measure(boy).faceLength * 0.92, '');
+  record(g, 'a wider face lowers the jaw region', idealError(wide, 'boy').regions.jaw > idealError(boy, 'boy').regions.jaw + 0.5, '');
+
+  // region scores go through the same formula as the total
+  const { regions } = idealError(girl, 'girl');
+  const scores = regionScores(regions);
+  record(g, 'region scores use the score formula', Object.entries(regions).every(([r, e]) => scores[r] === scoreFromError(e)), '');
+
+  // the face turned back is in the size of the reference
+  const front = turned(boy);
+  const eyeSpan = Math.hypot(front[33][0] - front[263][0], front[33][1] - front[263][1]);
+  record(g, 'turned() resizes to the reference (outer eye corners about 1 apart)', Math.abs(eyeSpan - 1) < 0.15, `${eyeSpan}`);
+
+  // the expression: a big smile or an open mouth is refused, the tip needs the margin to go away
+  const shapes = (smile = 0, mouthOpen = 0) => ({ mouthSmileLeft: smile, mouthSmileRight: smile, eyeSquintLeft: 0.3, eyeSquintRight: 0.3, jawOpen: mouthOpen });
+  record(g, 'no blendshapes: no problem', expressionProblem(null) === null && expressionProblem({}) === null, '');
+  record(g, 'a big smile is a smile problem', expressionProblem(shapes(0.6)) === 'smile', '');
+  record(g, 'an open mouth is a mouthOpen problem', expressionProblem(shapes(0, 0.4)) === 'mouthOpen', '');
+  record(g, 'a slight smile is fine', expressionProblem(shapes(0.3)) === null && expressionProblem(shapes(0.3), true) === null, '');
+  record(g, 'the hint comes earlier than the refusal', expressionProblem(shapes(0.4), true) === 'smile' && expressionProblem(shapes(0.4)) === null, '');
+  const tracker = new ExpressionTracker();
+  let t = 100;
+  const feed = (n, smile) => { let last = null; for (let i = 0; i < n; i++) { t += 0.05; last = tracker.add(shapes(smile), t); } return last; };
+  record(g, 'tracker: calm face gives no tip', feed(5, 0.1) === null, '');
+  t += 0.05;
+  record(g, 'tracker: one odd picture does not bring the tip', tracker.add(shapes(0.9), t) === null, '');
+  feed(12, 0.5);
+  record(g, 'tracker: a smile brings the tip', tracker.problem === 'smile', `${tracker.problem}`);
+  feed(12, IDEAL.HINT_SMILE - 0.02);
+  record(g, 'tracker: just under the limit it stays (the margin)', tracker.problem === 'smile', `${tracker.problem}`);
+  feed(12, 0.1);
+  record(g, 'tracker: a calm face takes it away', tracker.problem === null, `${tracker.problem}`);
+  tracker.add(shapes(0.9), t + 0.05);
+  tracker.reset();
+  record(g, 'tracker: reset forgets everything', tracker.problem === null && tracker.add(null, t + 0.1) === null, '');
+}
+
 // ---------- Run ----------
 function render(done) {
   const out = document.getElementById('out');
@@ -273,6 +488,10 @@ async function main() {
     testSizes(golden.sizeCases);
     testTrackers(golden.trackers);
     testRecents(golden.recents);
+    testIdealCases(golden);
+    testExpressionCases(golden.expressionCases);
+    testExpressionTrackers(golden.expressionTrackers);
+    await testBehaviour(golden);
   } catch (error) {
     record('setup', 'the run itself', false, `${error.name}: ${error.message}\n${error.stack}`);
   }

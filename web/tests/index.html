@@ -19,7 +19,7 @@
 <body>
 <h1>Scoring and head pose tests</h1>
 <p>Runs <code>js/scoring.js</code> and <code>js/headpose.js</code> on <code>golden.json</code>, which
-<code>tools/make_golden.py</code> makes from the Python app. Tolerances: score 0.05, clarity 0.02, angles 0.2 degrees.
+<code>tools/make_golden.py</code> makes from the Python app. Tolerances: score 0.05, clarity 0.02, angles 0.2 degrees, the ideal face's measurements and errors 1e-7.
 Serve the <code>web</code> folder (<code>py -3.14 -m http.server 8101 -d web</code>) and open <code>/tests/</code>.</p>
 <div id="summary">RUNNING</div>
 <pre id="out"></pre>

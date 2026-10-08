@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Face Rater</title>
-  <meta name="description" content="Compare your face with the model face and get a score. Everything happens on your device.">
+  <meta name="description" content="Rate your face against an ideal face and get a score. Everything happens on your device.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#202020" media="(prefers-color-scheme: dark)">
@@ -48,8 +48,8 @@
           <button type="button" class="icon-btn" id="aboutBtn" aria-label="About" aria-haspopup="dialog">i</button>
         </div>
       </header>
-      <p class="caption">Compare with the model face</p>
-      <div class="seg" role="radiogroup" aria-label="Model face" id="reference">
+      <p class="caption">Rate against the ideal</p>
+      <div class="seg" role="radiogroup" aria-label="Ideal" id="reference">
         <label><input type="radio" name="reference" value="boy" checked><span>Boy</span></label>
         <label><input type="radio" name="reference" value="girl"><span>Girl</span></label>
       </div>
@@ -83,7 +83,7 @@
         </div>
         <div class="stat regions">
           <div class="row"><span>By region</span><small>best first</small></div>
-          <ul id="regions" aria-label="Match with the model face by region, out of 10, best first">
+          <ul id="regions" aria-label="Match with the ideal by region, out of 10, best first">
           <li data-region="brows"><span>Brows</span><b>&ndash;</b><i class="bar" aria-hidden="true"><i></i></i></li>
           <li data-region="eyes"><span>Eyes</span><b>&ndash;</b><i class="bar" aria-hidden="true"><i></i></i></li>
           <li data-region="nose"><span>Nose</span><b>&ndash;</b><i class="bar" aria-hidden="true"><i></i></i></li>
@@ -132,7 +132,7 @@
   <dialog id="about" aria-labelledby="aboutTitle">
     <form method="dialog" class="about-body">
       <h2 id="aboutTitle">About</h2>
-      <p><strong>How it works.</strong> Face Rater finds landmark points on your face, turns your head back to face the camera and compares the layout with the model faces. The closest one counts, and each part of the face gets its own score too. It is a fun comparison, not a real measure of beauty.</p>
+      <p><strong>How it works.</strong> Face Rater finds landmark points on your face, turns your head back to face the camera, measures proportions like the eye spacing, nose width and jaw shape and compares them with an ideal face. A smile is corrected for, a big one is not rated. Each part of the face gets its own score too. It is a fun comparison, not a real measure of beauty.</p>
       <p>Photos are processed on this device and never uploaded.</p>
       <p id="boardPrivacy" hidden>The leaderboard is optional. If you opt in, your nickname, score and region scores are stored with Supabase (EU). Nothing else, and never a photo.</p>
       <p class="about-note" id="clearNote" role="status" aria-live="polite"></p>
@@ -168,7 +168,7 @@
   <dialog id="board" aria-labelledby="boardTitle">
     <div class="about-body">
       <h2 id="boardTitle">Leaderboard</h2>
-      <div class="seg" role="radiogroup" aria-label="Model face" id="boardRef">
+      <div class="seg" role="radiogroup" aria-label="Ideal" id="boardRef">
         <label><input type="radio" name="boardRef" value="boy" checked><span>Boy</span></label>
         <label><input type="radio" name="boardRef" value="girl"><span>Girl</span></label>
       </div>

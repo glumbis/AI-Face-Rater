@@ -21,7 +21,8 @@ def test_save_and_load_roundtrip(tmp_path):
     assert entries[1].clarity == 0.8 and entries[1].symmetry == 0.9
     # Only numbers and short words are saved
     text = open(history.history_path(str(tmp_path)), encoding="utf-8").read()
-    assert text.splitlines()[0] == "time,model,score,clarity,symmetry,source"
+    assert text.splitlines()[0] == "time,model,score,clarity,symmetry,source,scale"
+    assert entries[0].scale == history.SCALE
 
 
 def test_missing_folder_is_created_and_missing_file_is_empty(tmp_path):
@@ -124,3 +125,18 @@ def test_rows_for_the_removed_average_face_are_skipped(tmp_path):
     entries = history.load(str(tmp_path))
     assert [e.model for e in entries] == ["boy"]
     assert history.compare(entries, "average", 5.0) is None
+
+
+def test_ratings_on_the_old_scale_are_not_compared(tmp_path):
+    # A file from before the scale column: its rows are on scale 1, and new rows are appended with the scale at the end
+    path = history.history_path(str(tmp_path))
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write("time,model,score,clarity,symmetry,source\n2026-05-19T12:00:00,boy,9.5,,0.9,file\n")
+    add(tmp_path, "boy", 5.0)
+    entries = history.load(str(tmp_path))
+    assert [e.scale for e in entries] == [1, history.SCALE]
+    # The old 9.5 doesn't count as the best or in the average, but the day counts for the streak
+    result = history.compare(entries, "boy", 6.0)
+    assert result["best"] == 6.0 and result["count"] == 2 and result["diff"] == 1.0
+    assert history.compare(entries[:1], "boy", 6.0) is None
+    assert history.streak(entries, today=date(2026, 5, 20)) == 2
